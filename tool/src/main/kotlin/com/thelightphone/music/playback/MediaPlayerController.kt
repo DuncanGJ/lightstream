@@ -84,11 +84,6 @@ class MediaPlayerController : PlaybackController {
         _state.value = PlaybackState(status = PlaybackStatus.IDLE)
     }
 
-    override fun seekTo(positionMs: Int) {
-        player.seekTo(positionMs)
-        _state.update { it.copy(positionMs = positionMs) }
-    }
-
     override fun release() {
         stopTicker()
         scope.cancel()

@@ -20,6 +20,13 @@ data class PlaybackState(
  * The playback seam (ADR-0002). Everything above it — queue, cache, UI — is design-independent;
  * only the implementation below it changes when LightOS ships its sanctioned audio API. The
  * current implementation ([MediaPlayerController]) is a disposable foreground-only shim.
+ *
+ * Contract for adapters (the future LightOS one included):
+ * - [onCompletion] must be assigned BEFORE the first [play]; a completion that fires with no
+ *   handler is dropped and the queue silently stops advancing. It may be invoked on the
+ *   implementation's own thread.
+ * - Construct on the main thread unless the adapter documents otherwise (the MediaPlayer shim
+ *   delivers callbacks on its creating thread).
  */
 interface PlaybackController {
     val state: StateFlow<PlaybackState>
@@ -29,7 +36,6 @@ interface PlaybackController {
     fun pause()
     fun resume()
     fun stop()
-    fun seekTo(positionMs: Int)
 
     /** Invoked when the current source finishes on its own — used to advance the queue. */
     var onCompletion: (() -> Unit)?

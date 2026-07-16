@@ -27,8 +27,10 @@ class HomeScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>(
 
     @Composable
     override fun Content() {
-        val player by MusicApp.player.collectAsState()
-        val configured = player != null
+        // The ONE readiness gate: every screen below is only reachable once a session exists,
+        // so they may capture MusicApp.requireSession() at construction without null-dancing.
+        val session by MusicApp.session.collectAsState()
+        val configured = session != null
 
         MusicScaffold(
             title = "LightDrome",

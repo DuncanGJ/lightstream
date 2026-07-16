@@ -45,8 +45,6 @@ class SubsonicClient(
         ) it else "https://$it"
     }
 
-    suspend fun ping(): Boolean = pingError() == null
-
     /** Null if the server is reachable and responds OK; otherwise a short failure reason. */
     suspend fun pingError(): String? = try {
         request("ping") // throws SubsonicException (e.g. bad credentials) or IO errors

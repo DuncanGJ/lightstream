@@ -52,7 +52,6 @@ private class FakePlaybackController : PlaybackController {
     override var onCompletion: (() -> Unit)? = null
 
     val played = mutableListOf<AudioSource>()
-    var seekedTo: Int? = null
     var stopped = false
 
     override fun play(source: AudioSource) {
@@ -62,7 +61,6 @@ private class FakePlaybackController : PlaybackController {
     override fun pause() { _state.value = _state.value.copy(status = PlaybackStatus.PAUSED) }
     override fun resume() { _state.value = _state.value.copy(status = PlaybackStatus.PLAYING) }
     override fun stop() { stopped = true; _state.value = PlaybackState() }
-    override fun seekTo(positionMs: Int) { seekedTo = positionMs }
     override fun release() {}
 
     fun setPosition(ms: Int) { _state.value = _state.value.copy(positionMs = ms) }
@@ -75,8 +73,11 @@ private class Fixture(scope: CoroutineScope) {
     val subsonic = SubsonicClient(SubsonicCredentials("https://s.test", "u", "p"), http)
     val cache = TrackCache(FakeCacheDao(), http, subsonic, createTempDirectory("player-test").toFile())
     val controller = FakePlaybackController()
-    val player = Player(subsonic, cache, controller, scope)
+    val player = Player(cache, controller, scope, resolveRemote = { AudioSource.Remote(subsonic.streamUrl(it)) })
 }
+
+/** The observable queue window, as ids — the queue page's exact view of the Player. */
+private fun Player.upcomingIds(): List<String> = upcoming.value.map { it.track.id }
 
 private suspend fun awaitUntil(what: String, condition: () -> Boolean) {
     val deadline = System.currentTimeMillis() + 2_000
@@ -168,10 +169,10 @@ class PlayerTest {
         val f = Fixture(this)
 
         f.player.addToQueue(track("x")) // nothing is playing
-        delay(100)
+        awaitUntil("queued") { f.player.upcomingIds() == listOf("x") }
 
         assertTrue(f.controller.played.isEmpty(), "nothing may start on its own")
-        assertEquals("x", f.player.upcomingItems(5).first().track.id)
+        assertTrue(f.engine.requestHistory.isEmpty(), "idle queueing must not prefetch or stream")
         f.player.release()
     }
 
@@ -186,7 +187,7 @@ class PlayerTest {
         awaitUntil("stopped") { f.controller.stopped }
 
         assertEquals(null, f.player.current.value, "now-playing must clear so the bar hides")
-        assertEquals(listOf("a1", "x", "a2"), f.player.upcomingItems(5).map { it.track.id })
+        awaitUntil("queue retained") { f.player.upcomingIds() == listOf("a1", "x", "a2") }
         f.player.release()
     }
 
@@ -197,10 +198,10 @@ class PlayerTest {
         awaitUntil("first play") { f.controller.played.size == 1 }
 
         f.player.addToQueue(track("x"))
+        awaitUntil("queued") { f.player.upcomingIds().firstOrNull() == "x" }
         delay(100) // give any (wrong) playback a chance to happen
 
         assertEquals(1, f.controller.played.size, "the current song must keep playing")
-        assertEquals("x", f.player.upcomingItems(5).first().track.id)
         f.player.release()
     }
 
@@ -224,6 +225,51 @@ class PlayerTest {
         f.player.skipPrevious()
         awaitUntil("previous") { f.controller.played.size == 3 }
         assertEquals("a1", playedId(f.controller.played.last()), "the finished song must be in history")
+        f.player.release()
+    }
+
+    @Test
+    fun `repeat ONE replays on completion but the next button still advances`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("first play") { f.controller.played.size == 1 }
+
+        f.player.cycleRepeat() // OFF → ALL
+        f.player.cycleRepeat() // ALL → ONE
+        f.controller.completeCurrent()
+        awaitUntil("replay") { f.controller.played.size == 2 }
+        assertEquals("a1", playedId(f.controller.played.last()), "natural completion must replay")
+
+        f.player.skipNext()
+        awaitUntil("user skip") { f.controller.played.size == 3 }
+        assertEquals("a2", playedId(f.controller.played.last()), "the next button must escape Repeat One")
+        f.player.release()
+    }
+
+    @Test
+    fun `queue edits re-emit the observable upcoming window`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"), track("a3"))), 0)
+        awaitUntil("initial window") { f.player.upcomingIds() == listOf("a2", "a3") }
+
+        f.player.moveUpcoming(0, 1)
+        awaitUntil("move re-emits") { f.player.upcomingIds() == listOf("a3", "a2") }
+
+        f.player.removeUpcoming(1)
+        awaitUntil("remove re-emits") { f.player.upcomingIds() == listOf("a3") }
+        f.player.release()
+    }
+
+    @Test
+    fun `queue edits re-aim the rolling prefetch window`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("first play") { f.controller.played.size == 1 }
+
+        f.player.addToQueue(track("x")) // now up next — the prefetch window must include it
+        awaitUntil("x prefetched") {
+            f.engine.requestHistory.any { it.url.parameters["id"] == "x" }
+        }
         f.player.release()
     }
 

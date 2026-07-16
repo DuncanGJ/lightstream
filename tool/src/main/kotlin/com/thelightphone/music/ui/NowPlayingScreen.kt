@@ -25,23 +25,19 @@ import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.lightClickable
 
 class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>(sealedActivity) {
+
+    private val player = MusicApp.requireSession().player
+
     @Composable
     override fun Content() {
-        val player by MusicApp.player.collectAsState()
-
         MusicScaffold(
             title = "Now Playing",
             onBack = { goBack() },
             onQueue = { navigateTo({ QueueScreen(it) }) },
         ) {
-            val p = player
-            if (p == null) {
-                LightText("Nothing playing.", variant = LightTextVariant.Copy, lighten = true, modifier = Modifier.padding(vertical = 24.dp))
-                return@MusicScaffold
-            }
-            val track by p.current.collectAsState()
-            val playback by p.state.collectAsState()
-            val repeat by p.repeatMode.collectAsState()
+            val track by player.current.collectAsState()
+            val playback by player.state.collectAsState()
+            val repeat by player.repeatMode.collectAsState()
 
             val t = track
             if (t == null) {
@@ -67,17 +63,17 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                LightIcon(LightIcons.REWIND, modifier = Modifier.lightClickable { p.skipPrevious() })
+                LightIcon(LightIcons.REWIND, modifier = Modifier.lightClickable { player.skipPrevious() })
                 LightIcon(
                     icon = if (playback.status == PlaybackStatus.PLAYING) LightIcons.PAUSE else LightIcons.PLAY,
                     size = 3f,
-                    modifier = Modifier.lightClickable { p.togglePlayPause() },
+                    modifier = Modifier.lightClickable { player.togglePlayPause() },
                 )
-                LightIcon(LightIcons.FAST_FORWARD, modifier = Modifier.lightClickable { p.skipNext() })
+                LightIcon(LightIcons.FAST_FORWARD, modifier = Modifier.lightClickable { player.skipNext() })
                 LightIcon(
                     icon = LightIcons.STOP,
                     contentDescription = "stop (queue is kept)",
-                    modifier = Modifier.lightClickable { p.stop() },
+                    modifier = Modifier.lightClickable { player.stop() },
                 )
             }
 
@@ -91,7 +87,7 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 variant = LightTextVariant.Detail,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .lightClickable { p.cycleRepeat() }
+                    .lightClickable { player.cycleRepeat() }
                     .padding(vertical = 16.dp),
             )
         }

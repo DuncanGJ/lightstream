@@ -4,44 +4,44 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.thelightphone.music.app.MusicApp
+import com.thelightphone.music.library.LibraryRepository
 import com.thelightphone.music.model.Album
 import com.thelightphone.music.model.Artist
 import com.thelightphone.music.model.Playlist
 import com.thelightphone.music.model.Track
+import com.thelightphone.music.playback.Player
 import com.thelightphone.music.queue.ListSource
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
-import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.ui.LightText
 import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.lightClickable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 
-class ArtistsViewModel : LightViewModel<Unit>() {
+/** Where tapping an artist should go — decided on the freshest available album list. */
+sealed interface ArtistDestination {
+    /** The artist has exactly one album: skip the album level, open its tracks directly. */
+    data class SingleAlbum(val album: Album) : ArtistDestination
+    data class Albums(val artist: Artist) : ArtistDestination
+}
+
+class ArtistsViewModel(private val library: LibraryRepository) : LightViewModel<Unit>() {
     private val _artists = MutableStateFlow<List<Artist>>(emptyList())
     val artists: StateFlow<List<Artist>> = _artists.asStateFlow()
     private val _filter = MutableStateFlow("")
@@ -51,7 +51,6 @@ class ArtistsViewModel : LightViewModel<Unit>() {
 
     init {
         viewModelScope.launch {
-            val library = MusicApp.library.filterNotNull().first()
             library.artists()
                 .onCompletion { _loaded.value = true }
                 .collect {
@@ -62,17 +61,26 @@ class ArtistsViewModel : LightViewModel<Unit>() {
     }
 
     fun setFilter(value: String) { _filter.value = value }
+
+    /**
+     * Decide the tap-through on [LibraryRepository.artistAlbumsNow] — never the stale-while-
+     * revalidate cache, whose first emission could hide an artist's newly-added second album.
+     */
+    suspend fun destinationFor(artist: Artist): ArtistDestination {
+        val only = library.artistAlbumsNow(artist.id)?.singleOrNull()
+        return if (only != null) ArtistDestination.SingleAlbum(only) else ArtistDestination.Albums(artist)
+    }
 }
 
 class ArtistsScreen(sealedActivity: SealedLightActivity) :
     LightScreen<Unit, ArtistsViewModel>(sealedActivity) {
 
-    private val listState = LazyListState() // instance-held: survives back-navigation
+    private val listState = retainedListState()
 
     override val viewModelClass: Class<ArtistsViewModel>
         get() = ArtistsViewModel::class.java
 
-    override fun createViewModel() = ArtistsViewModel()
+    override fun createViewModel() = ArtistsViewModel(MusicApp.requireSession().library)
 
     @Composable
     override fun Content() {
@@ -82,17 +90,14 @@ class ArtistsScreen(sealedActivity: SealedLightActivity) :
         val scope = rememberCoroutineScope()
         val shown = if (filter.isBlank()) artists else artists.filter { it.name.contains(filter, ignoreCase = true) }
 
-        // Single-album artists skip the album level and open the tracks directly (decided at tap
-        // time, not on compose, so back-navigation doesn't bounce forward again).
+        // Decided at tap time, not on compose, so back-navigation doesn't bounce forward again.
         fun openArtist(artist: Artist) {
             scope.launch {
-                val albums = MusicApp.library.value
-                    ?.let { lib -> runCatching { lib.artistAlbums(artist.id).firstOrNull() }.getOrNull() }
-                val only = albums?.singleOrNull()
-                if (only != null) {
-                    navigateTo({ TrackListScreen(it, only.name, TrackListRequest.Album(only.id)) })
-                } else {
-                    navigateTo({ AlbumListScreen(it, artist.name, artist.id) })
+                when (val dest = viewModel.destinationFor(artist)) {
+                    is ArtistDestination.SingleAlbum ->
+                        navigateTo({ TrackListScreen(it, dest.album.name, TrackListRequest.Album(dest.album.id)) })
+                    is ArtistDestination.Albums ->
+                        navigateTo({ AlbumListScreen(it, dest.artist.name, dest.artist.id) })
                 }
             }
         }
@@ -100,12 +105,7 @@ class ArtistsScreen(sealedActivity: SealedLightActivity) :
         MusicScaffold(
             title = if (filter.isBlank()) "Artists" else "Artists · $filter",
             onBack = { goBack() },
-            onSearch = {
-                navigateTo(
-                    screenFactory = { TextEntryScreen(it, "Filter Artists", filter) },
-                    resultCallback = { viewModel.setFilter(it) },
-                )
-            },
+            onSearch = { editText("Filter Artists", filter) { viewModel.setFilter(it) } },
             onOpenNowPlaying = { navigateTo({ NowPlayingScreen(it) }) },
         ) {
             if (!loaded) {
@@ -128,7 +128,10 @@ class ArtistsScreen(sealedActivity: SealedLightActivity) :
     }
 }
 
-class AlbumListViewModel(private val artistId: String?) : LightViewModel<Unit>() {
+class AlbumListViewModel(
+    library: LibraryRepository,
+    artistId: String?,
+) : LightViewModel<Unit>() {
     private val _albums = MutableStateFlow<List<Album>>(emptyList())
     val albums: StateFlow<List<Album>> = _albums.asStateFlow()
     private val _filter = MutableStateFlow("")
@@ -136,7 +139,6 @@ class AlbumListViewModel(private val artistId: String?) : LightViewModel<Unit>()
 
     init {
         viewModelScope.launch {
-            val library = MusicApp.library.filterNotNull().first()
             val albums = if (artistId == null) library.albums() else library.artistAlbums(artistId)
             albums.collect { _albums.value = it }
         }
@@ -151,12 +153,12 @@ class AlbumListScreen(
     private val artistId: String?,
 ) : LightScreen<Unit, AlbumListViewModel>(sealedActivity) {
 
-    private val listState = LazyListState() // instance-held: survives back-navigation
+    private val listState = retainedListState()
 
     override val viewModelClass: Class<AlbumListViewModel>
         get() = AlbumListViewModel::class.java
 
-    override fun createViewModel() = AlbumListViewModel(artistId)
+    override fun createViewModel() = AlbumListViewModel(MusicApp.requireSession().library, artistId)
 
     @Composable
     override fun Content() {
@@ -167,12 +169,7 @@ class AlbumListScreen(
         MusicScaffold(
             title = title,
             onBack = { goBack() },
-            onSearch = {
-                navigateTo(
-                    screenFactory = { TextEntryScreen(it, "Filter Albums", filter) },
-                    resultCallback = { viewModel.setFilter(it) },
-                )
-            },
+            onSearch = { editText("Filter Albums", filter) { viewModel.setFilter(it) } },
             onOpenNowPlaying = { navigateTo({ NowPlayingScreen(it) }) },
         ) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -197,28 +194,48 @@ sealed interface TrackListRequest {
     data class PlaylistTracks(val id: String) : TrackListRequest
 }
 
+class TrackListViewModel(
+    library: LibraryRepository,
+    private val player: Player,
+    private val title: String,
+    request: TrackListRequest,
+) : LightViewModel<Unit>() {
+    private val _tracks = MutableStateFlow<List<Track>>(emptyList())
+    val tracks: StateFlow<List<Track>> = _tracks.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            val flow = when (request) {
+                is TrackListRequest.Album -> library.albumTracks(request.id)
+                is TrackListRequest.PlaylistTracks -> library.playlistTracks(request.id)
+            }
+            flow.collect { _tracks.value = it }
+        }
+    }
+
+    fun play(index: Int) = player.playFrom(ListSource(title, _tracks.value), index)
+    fun queue(track: Track) = player.addToQueue(track)
+}
+
 class TrackListScreen(
     sealedActivity: SealedLightActivity,
     private val title: String,
     private val request: TrackListRequest,
-) : SimpleLightScreen<Unit>(sealedActivity) {
+) : LightScreen<Unit, TrackListViewModel>(sealedActivity) {
 
-    private val listState = LazyListState() // instance-held: survives back-navigation
+    private val listState = retainedListState()
+
+    override val viewModelClass: Class<TrackListViewModel>
+        get() = TrackListViewModel::class.java
+
+    override fun createViewModel(): TrackListViewModel {
+        val session = MusicApp.requireSession()
+        return TrackListViewModel(session.library, session.player, title, request)
+    }
 
     @Composable
     override fun Content() {
-        val library by MusicApp.library.collectAsState()
-        val player by MusicApp.player.collectAsState()
-        var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
-
-        LaunchedEffect(library) {
-            val lib = library ?: return@LaunchedEffect
-            val flow = when (val r = request) {
-                is TrackListRequest.Album -> lib.albumTracks(r.id)
-                is TrackListRequest.PlaylistTracks -> lib.playlistTracks(r.id)
-            }
-            flow.collect { tracks = it }
-        }
+        val tracks by viewModel.tracks.collectAsState()
 
         MusicScaffold(
             title = title,
@@ -229,8 +246,8 @@ class TrackListScreen(
                 itemsIndexed(tracks) { index, track ->
                     TrackRow(
                         track = track,
-                        onPlay = { player?.playFrom(ListSource(title, tracks), index) },
-                        onQueue = { player?.addToQueue(track) },
+                        onPlay = { viewModel.play(index) },
+                        onQueue = { viewModel.queue(track) },
                     )
                 }
             }
@@ -238,19 +255,28 @@ class TrackListScreen(
     }
 }
 
-class PlaylistsScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>(sealedActivity) {
+class PlaylistsViewModel(library: LibraryRepository) : LightViewModel<Unit>() {
+    private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
+    val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
 
-    private val listState = LazyListState() // instance-held: survives back-navigation
+    init {
+        viewModelScope.launch { library.playlists().collect { _playlists.value = it } }
+    }
+}
+
+class PlaylistsScreen(sealedActivity: SealedLightActivity) :
+    LightScreen<Unit, PlaylistsViewModel>(sealedActivity) {
+
+    private val listState = retainedListState()
+
+    override val viewModelClass: Class<PlaylistsViewModel>
+        get() = PlaylistsViewModel::class.java
+
+    override fun createViewModel() = PlaylistsViewModel(MusicApp.requireSession().library)
 
     @Composable
     override fun Content() {
-        val library by MusicApp.library.collectAsState()
-        var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
-
-        LaunchedEffect(library) {
-            val lib = library ?: return@LaunchedEffect
-            lib.playlists().collect { playlists = it }
-        }
+        val playlists by viewModel.playlists.collectAsState()
 
         MusicScaffold(
             title = "Playlists",

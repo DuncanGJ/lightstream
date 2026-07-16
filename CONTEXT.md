@@ -94,11 +94,15 @@ object.
 ### Queue
 A **cursor over a [[Source]]** plus a small **Play-Next overlay**. Next-track drains the
 overlay first, then advances the Source cursor. The Queue is owned by the Tool (design-
-independent, behind the playback seam), not by the server or by LightOS. Its upcoming window
-is editable **in place**: removing a Source-derived item adds it to a skip-set the cursor scans
-past; moving one materializes the touched prefix into the overlay (insert semantics), leaving
-everything beyond it lazy. The Queue is a **temporary playlist**: navigation — skip, previous,
-starting a new [[Source]] — never drops songs; only explicit removal does.
+independent, behind the playback seam), not by the server or by LightOS — and within the Tool
+it has **exactly one owner, the Player**: the UI never touches the Queue directly, it renders
+the Player's observable upcoming window and calls Player methods, which also re-aim the
+[[Rolling cache]] prefetch after every edit. Its upcoming window is editable **in place**:
+removing a Source-derived item adds it to a skip-set the cursor scans past; moving one
+materializes the touched prefix into the overlay (insert semantics), leaving everything beyond
+it lazy. The Queue is a **temporary playlist**: navigation — skip, previous, starting a new
+[[Source]] — never drops songs; only explicit removal does. Repeat One repeats on *natural
+completion only* — the next button always advances.
 
 ### History
 The capped stack of previously-played tracks, each stored with its full [[Queue]] context
@@ -116,12 +120,27 @@ playback starts immediately.
 A named, ordered, server-side list of tracks from the [[Subsonic API (integration surface)]]
 (`getPlaylists` / `getPlaylist`). Can serve as a [[Source]]. Read-only from the Tool in v1.
 
+### Library
+The one seam for library data: every screen reads artists/albums/tracks/playlists/search
+through the Library module, never through the Subsonic client directly, so "is this cached /
+does it work offline?" is answered in one place. Three policies live behind it: browse lists
+are [[Metadata cache]] stale-while-revalidate flows; decisions and pages that must not act on
+stale data (the single-album tap-through, Songs pages) are **network-first with cache
+fallback**; [[Search]] is live and deliberately uncached (results are query-shaped).
+
 ### Metadata cache
 Stale-while-revalidate persistence for browse metadata (artists, albums, tracks, playlists):
 every list renders instantly from the last-seen copy while a background refresh updates it in
 place — and only re-renders if something actually changed. Makes browsing seamless on slow
 links and read-only-offline for anything seen before. Holds names and ids, not audio — audio
-bytes live in the [[Rolling cache]].
+bytes live in the [[Rolling cache]]. Accessed only through the [[Library]].
+
+### Session
+One configured connection to the server and everything wired to it: Subsonic client,
+[[Library]], Player, [[Rolling cache]]. Rebuilt **as a unit** whenever credentials change.
+Screens beyond Home capture it at construction — safe because Settings (the only place a
+Session is rebuilt) is reachable only from Home, so no browse screen outlives a Session swap.
+Home is the single readiness gate ("is there a Session yet?"); no other screen null-checks.
 
 ### Rolling cache
 A bounded, self-evicting on-device store of transcoded audio — recently-played plus

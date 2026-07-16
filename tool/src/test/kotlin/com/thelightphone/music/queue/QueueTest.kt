@@ -217,6 +217,41 @@ class QueueTest {
     }
 
     @Test
+    fun `repeat ONE replays the current track on natural completion`() = runBlocking {
+        val queue = Queue(repeat = { RepeatMode.ONE })
+        queue.start(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+
+        assertEquals("a1", queue.next()?.id, "natural completion must stay on the track")
+        assertEquals("a1", queue.next()?.id, "…every time")
+    }
+
+    @Test
+    fun `repeat ONE does not trap the next button`() = runBlocking {
+        val queue = Queue(repeat = { RepeatMode.ONE })
+        queue.start(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+
+        assertEquals("a2", queue.next(userSkip = true)?.id, "a user skip must still advance")
+    }
+
+    @Test
+    fun `repeat ALL wraps from the end of the source back to its start`() = runBlocking {
+        val queue = Queue(repeat = { RepeatMode.ALL })
+        queue.start(ListSource("A", listOf(track("a1"), track("a2"))), 1)
+
+        assertEquals("a1", queue.next()?.id, "the source must wrap, not stop")
+    }
+
+    @Test
+    fun `repeat mode is read live from the supplier`() = runBlocking {
+        var mode = RepeatMode.OFF
+        val queue = Queue(repeat = { mode })
+        queue.start(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+
+        mode = RepeatMode.ONE
+        assertEquals("a1", queue.next()?.id, "a mode change applies without rebuilding the queue")
+    }
+
+    @Test
     fun `queue advances through an unknown-size paged source to its end`() = runBlocking {
         val queue = Queue()
         val songs = PagedSource("Songs", pageSize = 3) { offset, count ->

@@ -64,7 +64,7 @@ class SubsonicClientTest {
     fun `requests carry salted-token auth and never the raw password`() = runBlocking {
         val (client, engine) = client()
 
-        client.ping()
+        client.pingError()
 
         val url = engine.requestHistory.single().url
         val salt = assertNotNull(url.parameters["s"], "salt must be sent")
@@ -78,7 +78,7 @@ class SubsonicClientTest {
         // Regression: Ktor treats a scheme-less URL as a path on http://localhost.
         val (client, engine) = client(baseUrl = " music.example.com/ ")
 
-        client.ping()
+        client.pingError()
 
         val url = engine.requestHistory.single().url
         assertEquals("https", url.protocol.name)

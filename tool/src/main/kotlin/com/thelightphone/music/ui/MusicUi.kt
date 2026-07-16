@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -21,11 +22,13 @@ import androidx.compose.ui.unit.dp
 import com.thelightphone.music.app.MusicApp
 import com.thelightphone.music.model.Track
 import com.thelightphone.music.playback.PlaybackStatus
+import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightBottomBar
 import com.thelightphone.sdk.ui.LightIcon
 import com.thelightphone.sdk.ui.LightIcons
 import com.thelightphone.sdk.ui.LightText
+import com.thelightphone.sdk.ui.LightTextField
 import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.LightTheme
 import com.thelightphone.sdk.ui.LightThemeController
@@ -78,8 +81,8 @@ fun MusicScaffold(
 
 @Composable
 private fun NowPlayingBar(onOpen: () -> Unit) {
-    val player by MusicApp.player.collectAsState()
-    val p = player ?: return
+    val session by MusicApp.session.collectAsState()
+    val p = session?.player ?: return
     val track by p.current.collectAsState()
     val t = track ?: return
     val playback by p.state.collectAsState()
@@ -109,12 +112,17 @@ fun MenuRow(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun TrackRow(track: Track, onPlay: () -> Unit, onQueue: () -> Unit) {
+fun TrackRow(
+    track: Track,
+    onPlay: () -> Unit,
+    onQueue: () -> Unit,
+    // Default-arg wiring: the one place this leaf touches the app object, overridable by callers.
+    flashMs: Long = MusicApp.queuedFlashMs.collectAsState().value,
+) {
     // The ＋ flips to a filled dot (CAMERA_RECORDING) for a moment after queueing — quiet
     // feedback, no system toast (Toast needs a Context, which the Light plugin blocks).
     // SELECT_ON would be the semantic fit but its asset renders cropped (SDK bug).
     var queuedFlash by remember { mutableStateOf(false) }
-    val flashMs by MusicApp.queuedFlashMs.collectAsState()
     LaunchedEffect(queuedFlash) {
         if (queuedFlash) {
             delay(flashMs)
@@ -163,4 +171,44 @@ fun formatTime(ms: Int): String {
     if (ms <= 0) return "0:00"
     val totalSec = ms / 1000
     return "%d:%02d".format(totalSec / 60, totalSec % 60)
+}
+
+/**
+ * A [LazyListState] owned by the SCREEN INSTANCE, not the composition: LightActivity disposes
+ * non-current screens entirely, so `rememberLazyListState` would forget the scroll position on
+ * every navigation. Hold this in a screen property to retain scrolling across back-navigation.
+ */
+fun retainedListState() = LazyListState()
+
+/**
+ * A [LightTextField] that opens the full-screen keyboard editor and routes the submitted text to
+ * [onResult]. The caller's composition is DISPOSED while the editor is on screen, so [onResult]
+ * must write ViewModel-held state — never `remember`. The round-trip lives here so call sites
+ * can't hold it wrong. [display] masks the shown value (e.g. a password) without changing what
+ * the editor opens with.
+ */
+@Composable
+fun SimpleLightScreen<*>.TextEntryField(
+    label: String,
+    value: String,
+    placeholder: String = "",
+    display: String = value,
+    modifier: Modifier = Modifier,
+    onResult: (String) -> Unit,
+) {
+    LightTextField(
+        label = label,
+        value = display,
+        placeholder = placeholder,
+        onClick = { editText(label, value, onResult) },
+        modifier = modifier,
+    )
+}
+
+/** Open the keyboard editor from any affordance (e.g. the top-bar filter icon). Same invariant as [TextEntryField]. */
+fun SimpleLightScreen<*>.editText(title: String, initial: String, onResult: (String) -> Unit) {
+    navigateTo(
+        screenFactory = { TextEntryScreen(it, title, initial) },
+        resultCallback = onResult,
+    )
 }

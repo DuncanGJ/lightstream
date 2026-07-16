@@ -31,10 +31,13 @@ class ListSource(
 
 /**
  * The playback queue (CONTEXT.md, ADR-0002): a cursor over a [Source] plus a Play-Next overlay.
- * [next] drains the overlay first, then advances the Source cursor, honouring [repeat]. Owned by
- * the tool, behind the playback seam. Not thread-safe: drive it from a single scope.
+ * [next] drains the overlay first, then advances the Source cursor, honouring [repeat] (read live
+ * from the supplier — [Player] owns the mode, the queue never stores its own copy). Owned by the
+ * tool, behind the playback seam. Not thread-safe: [Player] confines every call to its scope.
  */
-class Queue {
+class Queue(
+    private val repeat: () -> RepeatMode = { RepeatMode.OFF },
+) {
 
     private var source: Source = ListSource("", emptyList())
     private var cursor: Int = 0
@@ -55,12 +58,8 @@ class Queue {
     /** Track ids removed from the upcoming view; the cursor scans past them when advancing. */
     private val skippedIds = mutableSetOf<String>()
 
-    var repeat: RepeatMode = RepeatMode.OFF
-
     private val _current = MutableStateFlow<Track?>(null)
     val current: StateFlow<Track?> = _current
-
-    val sourceTitle: String get() = source.title
 
     /**
      * Begin playing [source] at [index], setting the item there as current. Hand-queued Play-Next
@@ -97,9 +96,13 @@ class Queue {
         _current.value = null
     }
 
-    /** Advance to the next track — overlay first, then the Source cursor. Null at the end. */
-    suspend fun next(): Track? {
-        if (repeat == RepeatMode.ONE && _current.value != null) return _current.value
+    /**
+     * Advance to the next track — overlay first, then the Source cursor. Null at the end.
+     * Repeat ONE only bites on natural completion: a [userSkip] must always advance, or the
+     * next button would trap the listener on the repeating track.
+     */
+    suspend fun next(userSkip: Boolean = false): Track? {
+        if (!userSkip && repeat() == RepeatMode.ONE && _current.value != null) return _current.value
         if (playNext.isNotEmpty()) {
             _current.value?.let { pushHistory(it) }
             _current.value = playNext.removeFirst()
@@ -125,7 +128,7 @@ class Queue {
             if (t.id !in skippedIds) return i
             i++
         }
-        if (repeat != RepeatMode.ALL) return null
+        if (repeat() != RepeatMode.ALL) return null
         val bound = source.size ?: return 0 // may have become known while probing
         var j = 0
         while (j < bound) {

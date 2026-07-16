@@ -3,64 +3,73 @@ package com.thelightphone.music.ui
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
 import com.thelightphone.music.app.MusicApp
+import com.thelightphone.music.library.LibraryRepository
 import com.thelightphone.music.model.Track
-import com.thelightphone.music.queue.PagedSource
+import com.thelightphone.music.playback.Player
+import com.thelightphone.music.queue.SourceWindow
+import com.thelightphone.sdk.LightScreen
+import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
-import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.ui.LightText
 import com.thelightphone.sdk.ui.LightTextVariant
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
- * The whole library, A→Z, backed by [PagedSource] — rows realize as you scroll, and playing the
- * midpoint queues the rest of the library without materializing it (the Source IS the queue).
+ * The whole library A→Z. One Library songs Source backs BOTH the visible list (via [SourceWindow])
+ * and the queue: playing the midpoint queues the rest of the library without materializing it.
  */
-class SongsScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>(sealedActivity) {
+class SongsViewModel(
+    library: LibraryRepository,
+    private val player: Player,
+) : LightViewModel<Unit>() {
+    private val source = library.songs() // page cache lives here, retained across back-navigation
+    private val window = SourceWindow(source)
 
-    private val listState = LazyListState() // instance-held: survives back-navigation
-    private var source: PagedSource? = null // instance-held: page cache survives too
+    val tracks: StateFlow<List<Track>> = window.items
+    val endReached: StateFlow<Boolean> = window.endReached
+
+    /** Keep the realized window ahead of the scroll position. */
+    fun ensure(count: Int) {
+        viewModelScope.launch { window.ensure(count) }
+    }
+
+    fun play(index: Int) = player.playFrom(source, index)
+    fun queue(track: Track) = player.addToQueue(track)
+}
+
+class SongsScreen(sealedActivity: SealedLightActivity) :
+    LightScreen<Unit, SongsViewModel>(sealedActivity) {
+
+    private val listState = retainedListState()
+
+    override val viewModelClass: Class<SongsViewModel>
+        get() = SongsViewModel::class.java
+
+    override fun createViewModel(): SongsViewModel {
+        val session = MusicApp.requireSession()
+        return SongsViewModel(session.library, session.player)
+    }
 
     @Composable
     override fun Content() {
-        val subsonic by MusicApp.subsonic.collectAsState()
-        val player by MusicApp.player.collectAsState()
-        var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
-        var endReached by remember { mutableStateOf(false) }
+        val tracks by viewModel.tracks.collectAsState()
+        val endReached by viewModel.endReached.collectAsState()
 
-        val s = subsonic
-        if (source == null && s != null) {
-            source = PagedSource("Songs", pageSize = PAGE) { offset, count -> s.getSongs(offset, count) }
-        }
-        val src = source
-
-        // Keep the realized list ahead of the scroll position (rolling, page-cached).
-        LaunchedEffect(src) {
-            if (src == null) return@LaunchedEffect
+        // The realization logic lives (tested) in SourceWindow; this only reports scroll position.
+        LaunchedEffect(Unit) {
             snapshotFlow { listState.firstVisibleItemIndex + listState.layoutInfo.visibleItemsInfo.size }
-                .collect { lastVisible ->
-                    while (!endReached && tracks.size < lastVisible + PRELOAD) {
-                        val from = tracks.size
-                        val batch = (from until from + PAGE).mapNotNull { src.get(it) }
-                        if (batch.isEmpty()) {
-                            endReached = true
-                        } else {
-                            tracks = tracks + batch
-                            if (batch.size < PAGE) endReached = true
-                        }
-                    }
-                }
+                .collect { lastVisible -> viewModel.ensure(lastVisible + PRELOAD) }
         }
 
         MusicScaffold(
@@ -80,8 +89,8 @@ class SongsScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>
                 itemsIndexed(tracks) { index, track ->
                     TrackRow(
                         track = track,
-                        onPlay = { src?.let { player?.playFrom(it, index) } },
-                        onQueue = { player?.addToQueue(track) },
+                        onPlay = { viewModel.play(index) },
+                        onQueue = { viewModel.queue(track) },
                     )
                 }
             }
@@ -89,7 +98,6 @@ class SongsScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>
     }
 
     private companion object {
-        const val PAGE = 100
         const val PRELOAD = 40
     }
 }
