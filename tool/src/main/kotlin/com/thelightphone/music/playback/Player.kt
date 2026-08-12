@@ -14,11 +14,14 @@ import kotlinx.coroutines.launch
 /**
  * The single owner of playback state. It drives the [Queue] (every queue call is confined to
  * [scope] — the queue itself is not thread-safe), resolves each track to a cached file or a remote
- * Stream URL via [TrackCache]/[SubsonicClient], plays it through the [PlaybackController] seam,
- * advances on completion, and keeps the rolling prefetch window full — re-aimed after every queue
- * edit, so it never downloads a track that was just removed. The UI never touches the queue
- * directly: it renders [current], [state], [upcoming] and [repeatMode], and calls the methods here.
- * Swapping the seam for LightOS's future audio API leaves everything here untouched. See ADR-0002.
+ * Stream URL via [TrackCache]/[SubsonicClient], and hands the [PlaybackController] seam a *window*
+ * of tracks — the current one plus what follows it — so playback survives the tool screen being
+ * gone (ADR-0003). The player then walks that window on its own and the queue cursor follows via
+ * [PlaybackController.onAdvance]; the tool is a bookkeeper for playback, no longer its heartbeat.
+ *
+ * It also keeps the rolling prefetch window full — re-aimed after every queue edit, so it never
+ * downloads a track that was just removed. The UI never touches the queue directly: it renders
+ * [current], [state], [upcoming] and [repeatMode], and calls the methods here.
  */
 class Player(
     private val cache: TrackCache,
@@ -42,15 +45,26 @@ class Player(
 
     private var prefetchJob: Job? = null
 
+    /** Where the player is inside the window we pushed, and how big that window was. */
+    private var windowIndex = 0
+    private var windowSize = 0
+
+    /**
+     * A queue edit landed after the window was pushed. Re-pointing playback mid-song would restart
+     * it, so the edited window is handed over at the next track boundary instead.
+     */
+    private var windowStale = false
+
     init {
-        controller.onCompletion = { advance(userSkip = false) }
+        controller.onAdvance = { index -> scope.launch { followAdvance(index) } }
+        controller.onWindowEnd = { scope.launch { finishQueue() } }
     }
 
     /** Begin playing [source] at [index]; the rest of the source becomes the up-next queue. */
     fun playFrom(source: Source, index: Int) {
         scope.launch {
             queue.start(source, index)
-            playCurrent()
+            pushWindow()
         }
     }
 
@@ -63,18 +77,42 @@ class Player(
     }
 
     /** The next button: always advances — Repeat ONE only bites on natural completion. */
-    fun skipNext() = advance(userSkip = true)
-
-    private fun advance(userSkip: Boolean) {
+    fun skipNext() {
         scope.launch {
-            if (queue.next(userSkip) != null) {
-                playCurrent()
-            } else {
-                queue.finish() // the song completed: History, not back into the queue
-                controller.stop()
-                refreshUpcoming()
+            if (queue.next(userSkip = true) != null) pushWindow() else finishQueue()
+        }
+    }
+
+    /**
+     * The player finished `windowIndex` and moved on by itself — one natural completion per step,
+     * so the queue records exactly what played (History, Repeat ONE) even while the tool screen was
+     * gone. A stale or nearly-exhausted window is refilled here, at the boundary: the track that
+     * just started restarts at zero, which is where it already is.
+     */
+    private suspend fun followAdvance(index: Int) {
+        repeat(index - windowIndex) { queue.next(userSkip = false) }
+        windowIndex = index
+        queue.current.value?.let { cache.touch(it.id) }
+        val remaining = windowSize - index // entries the player still holds, current included
+        if (windowStale || remaining <= REFILL_THRESHOLD) {
+            val window = queue.playbackWindow(WINDOW_DEPTH)
+            // Re-point only when it changes what will play: a short queue running out is the
+            // player correctly reaching its end, not a window that needs refilling.
+            if (windowStale || window.size > remaining) {
+                pushWindow(window)
+                return
             }
         }
+        refreshUpcoming()
+        refreshPrefetch()
+    }
+
+    /** The queue ran out: the last song completed, so it belongs in History, not back in the queue. */
+    private suspend fun finishQueue() {
+        queue.finish()
+        controller.stop()
+        windowSize = 0
+        refreshUpcoming()
     }
 
     /** User stop: playback and the now-playing bar go away; the queue is fully retained. */
@@ -83,6 +121,7 @@ class Player(
         scope.launch {
             queue.stop()
             controller.stop()
+            windowSize = 0
             refreshUpcoming()
         }
     }
@@ -90,7 +129,7 @@ class Player(
     /** Start the front of the queue when nothing is playing (the queue page's play button). */
     fun playNextInQueue() {
         scope.launch {
-            if (queue.next(userSkip = true) != null) playCurrent()
+            if (queue.next(userSkip = true) != null) pushWindow()
         }
     }
 
@@ -101,7 +140,7 @@ class Player(
     fun skipPrevious() {
         scope.launch {
             queue.previous()
-            playCurrent()
+            pushWindow()
         }
     }
 
@@ -123,6 +162,7 @@ class Player(
             RepeatMode.ALL -> RepeatMode.ONE
             RepeatMode.ONE -> RepeatMode.OFF
         }
+        windowStale = true // the pushed window was built under the old mode
     }
 
     fun release() {
@@ -133,15 +173,25 @@ class Player(
     private fun editQueue(edit: suspend () -> Unit) {
         scope.launch {
             edit()
+            windowStale = true
             refreshUpcoming()
             refreshPrefetch()
         }
     }
 
-    private suspend fun playCurrent() {
-        val track = queue.current.value ?: return
-        controller.play(resolve(track))
-        cache.touch(track.id)
+    /**
+     * Hand the player the current track plus what follows it, and start there. Called whenever
+     * playback is (re-)pointed — a new source, a skip, or a refill at a track boundary.
+     */
+    private suspend fun pushWindow() = pushWindow(queue.playbackWindow(WINDOW_DEPTH))
+
+    private suspend fun pushWindow(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        controller.play(tracks.map { PlayableTrack(resolve(it), it.title, it.artist, it.album, it.durationMs()) })
+        windowIndex = 0
+        windowSize = tracks.size
+        windowStale = false
+        cache.touch(tracks.first().id)
         refreshUpcoming()
         refreshPrefetch()
     }
@@ -165,5 +215,18 @@ class Player(
     companion object {
         const val DEFAULT_PREFETCH_DEPTH = 15
         const val UPCOMING_WINDOW = 50
+
+        /**
+         * How many tracks the player is handed at once. Deep enough that a refill is rare (each one
+         * restarts the track at the boundary it lands on), shallow enough that a queue edit reaches
+         * the player without materializing a whole lazy [Source].
+         */
+        const val WINDOW_DEPTH = 50
+
+        /** Refill once this few entries are left, so the player never runs the window dry. */
+        const val REFILL_THRESHOLD = 10
     }
 }
+
+/** The library's duration, in the milliseconds the platform's now-playing surfaces expect. */
+private fun Track.durationMs(): Long? = durationSec?.let { it * 1000L }

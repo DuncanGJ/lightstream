@@ -28,8 +28,9 @@ project's language, "LMS" means Lyrion-the-in-home-consumer, never the Tool's ba
 ### Subsonic API (integration surface)
 The Tool integrates with the library over the **Subsonic / OpenSubsonic API** — the de-facto
 open standard for self-hosted music. Its `stream` endpoint natively yields a stateless,
-self-authenticating, server-transcoded [[Stream URL]] — exactly what the forthcoming
-[[Playback API (forthcoming)]] (especially the centralized shape) needs. The Tool targets the
+self-authenticating, server-transcoded [[Stream URL]] — exactly what the
+[[Playback API (shipped: detached audio)]] needs, since every [[Playback window]] entry is one of
+these URLs handed straight to the media session. The Tool targets the
 *API*, not any one server, so the concrete server can change without touching the Tool. That
 server is added as another read-only consumer of the [[beets library (canonical source)]].
 Concrete server choice lives in the ADR.
@@ -54,15 +55,25 @@ or LightOS under the centralized model) needs one of these. Producing it from th
 Server is the durable core of the project. The Media Server that yields it most simply and
 openly is a primary selection criterion.
 
-### Playback API (forthcoming)
-Light's sanctioned audio surface, not yet shipped. Light has publicly committed to it as
-their #1 priority (discussions #38, #70) but given no timeline. Two candidate shapes are
-under evaluation, and they have opposite client implications:
-- **Tool-owned foreground service** — the Tool decodes audio itself.
-- **Centralized audio server** ("internal Chromecast") — the Tool hands LightOS a
-  [[Stream URL]] / queue and LightOS is the audio engine. Under this shape the phone's
-  Player role effectively moves into LightOS; the Tool becomes a browser + queue manager.
-Either way, play/pause must surface on the LightOS home screen.
+### Playback API (shipped: detached audio)
+Light's sanctioned audio surface, **shipped** in the **tool-owned** shape (light-sdk #148): the
+Tool decodes audio itself, in a `MediaSessionService` the SDK owns and the Gradle plugin declares
+in the Tool's manifest. The Tool opts in with `capabilities = ["detached-audio"]` and asks for a
+`LightAudioPlayer` in `Detached` mode. The rejected alternative — a centralized "internal
+Chromecast" where LightOS is the audio engine — is no longer a live concern for this project.
+
+"Detached" is an *ownership* word, not a visibility one: playback belongs to the session rather
+than to the screen that started it, so releasing the Tool's handle leaves music playing. The
+[[Playback window]] is what makes that self-sufficient. Play/pause reaches the LightOS home screen
+because the session is a platform `MediaSession`, which LightOS discovers on its own.
+
+### Playback window
+The slice of the [[Queue]] handed to the detached player: the current track plus what follows it,
+resolved to cache files or [[Stream URL]]s and carrying the metadata the phone's now-playing
+surfaces display. The session plays through it without the Tool, and the Tool follows along —
+its cursor steps forward as the session advances. Repeat lives *inside* the window (Repeat One
+fills it with one track, Repeat All wraps it), because the session has no repeat mode of its own.
+Queue edits reach the player at the next track boundary, never mid-song. See ADR-0003.
 
 ### Browse
 The navigation model: **iPod-style** hub-and-stack. A drill-down menu hierarchy (Music →
@@ -152,22 +163,23 @@ moment you skip past or stop. No Wi-Fi/cellular branching in v1 — bounded dept
 keep data in check. The over-cache bias lives in **retention** as much as prefetch. LRU
 eviction under a ~500 MB budget. Deeper dead-zone resilience (cache a whole album before going
 offline) is the future **pinned-download** feature — **not** this cache, which is opportunistic
-and evictable, never guaranteed. Lives in the Tool's private storage; a future centralized
-[[Playback API (forthcoming)]] would need the SDK file-share bridge for LightOS to read it.
+and evictable, never guaranteed. Lives in the Tool's private storage, which the SDK's audio
+service reads directly — it runs in the Tool's own process, so no file-share bridge is needed.
+A cache hit is decided when a track enters the [[Playback window]]: one that lands later still
+streams for that pass.
 
-## Standing constraint
+## Standing constraint (lifted)
 
-Today the SDK sanctions **no audio-playback primitive** and grants **no
-`FOREGROUND_SERVICE`**; `android.app.*`, `Service`, and `getSystemService()` are hard-blocked
-by the build plugin. So reliable **background** playback is not achievable as an approved
-Tool right now. `android.media.MediaPlayer(url)` compiles and plays foreground-only.
+The SDK used to sanction no audio-playback primitive and no `FOREGROUND_SERVICE`, so background
+playback was unreachable for an approved Tool and the project shipped a foreground-only
+`android.media.MediaPlayer` shim behind a swappable seam. That bet is settled: the
+[[Playback API (shipped: detached audio)]] arrived in the tool-owned shape, the plugin grants the
+foreground-service permissions to Tools that declare the capability, and the shim is gone.
 
-**But this is temporary and imminent-to-change** (see [[Playback API (forthcoming)]]).
-Because its final shape is undecided — and the centralized shape would orphan any tool-owned
-foreground-service work — the project **builds everything that is design-independent now**
-(auth, browsing, resolving a [[Stream URL]], UI) behind a swappable playback seam, and defers
-the audio last-mile to Light's API. Self-hacked background audio (plugin fork / sideload) is
-treated as disposable, not the strategy. See the ADR.
+What survives is the seam and everything built design-independently above it (auth, browsing,
+resolving a [[Stream URL]], [[Queue]], UI) — the swap cost one adapter and a
+[[Playback window]]-shaped interface. `android.app.*`, `Service` and `getSystemService()` remain
+blocked; the Tool never touches them, the SDK's service does.
 
 ## Flagged ambiguities
 

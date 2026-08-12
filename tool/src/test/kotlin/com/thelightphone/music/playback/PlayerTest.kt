@@ -45,17 +45,26 @@ private class FakeCacheDao : CacheDao {
     override suspend fun clearAll() { rows.clear() }
 }
 
-/** The playback seam, faked — records what the Player asks of it. */
+/**
+ * The playback seam, faked — a detached player that owns a pushed window and walks it by itself,
+ * exactly as media3 does inside the SDK's audio service once the tool screen is gone.
+ */
 private class FakePlaybackController : PlaybackController {
     private val _state = MutableStateFlow(PlaybackState())
     override val state: StateFlow<PlaybackState> = _state
-    override var onCompletion: (() -> Unit)? = null
+    override var onAdvance: ((Int) -> Unit)? = null
+    override var onWindowEnd: (() -> Unit)? = null
 
-    val played = mutableListOf<AudioSource>()
+    /** Every window handed over — a new entry means playback was re-pointed, not just advanced. */
+    val windows = mutableListOf<List<PlayableTrack>>()
+    var index = 0
+        private set
     var stopped = false
 
-    override fun play(source: AudioSource) {
-        played.add(source)
+    override fun play(window: List<PlayableTrack>) {
+        windows.add(window)
+        index = 0
+        stopped = false
         _state.value = PlaybackState(PlaybackStatus.PLAYING, positionMs = 0, durationMs = 100_000)
     }
     override fun pause() { _state.value = _state.value.copy(status = PlaybackStatus.PAUSED) }
@@ -64,7 +73,21 @@ private class FakePlaybackController : PlaybackController {
     override fun release() {}
 
     fun setPosition(ms: Int) { _state.value = _state.value.copy(positionMs = ms) }
-    fun completeCurrent() { onCompletion?.invoke() }
+
+    /** The current entry finishes: the player steps through its window, or runs out of it. */
+    fun completeCurrent() {
+        val window = windows.lastOrNull() ?: return
+        if (index + 1 < window.size) {
+            index++
+            onAdvance?.invoke(index)
+        } else {
+            _state.value = _state.value.copy(status = PlaybackStatus.ENDED)
+            onWindowEnd?.invoke()
+        }
+    }
+
+    /** What is coming out of the speaker right now. */
+    val nowPlaying: PlayableTrack? get() = windows.lastOrNull()?.getOrNull(index)
 }
 
 private class Fixture(scope: CoroutineScope) {
@@ -92,16 +115,52 @@ private fun playedId(source: AudioSource): String? = when (source) {
     is AudioSource.Local -> source.path.substringAfterLast('/').removeSuffix(".mp3")
 }
 
+/** The track ids of the window the detached player currently holds. */
+private fun FakePlaybackController.windowIds(): List<String?> =
+    windows.lastOrNull().orEmpty().map { playedId(it.source) }
+
+private fun FakePlaybackController.nowPlayingId(): String? = nowPlaying?.let { playedId(it.source) }
+
 class PlayerTest {
+
+    @Test
+    fun `playing hands the detached player the whole upcoming window, not one track`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"), track("a3"))), 0)
+
+        awaitUntil("window pushed") { f.controller.windows.isNotEmpty() }
+
+        assertEquals(
+            listOf("a1", "a2", "a3"),
+            f.controller.windowIds(),
+            "the player must be able to keep going without the tool screen",
+        )
+        f.player.release()
+    }
+
+    @Test
+    fun `the window carries metadata for the platform's now-playing surfaces`() = runBlocking {
+        val f = Fixture(this)
+        val song = track("a1").copy(title = "Nightswimming", artist = "R.E.M.", album = "Automatic")
+
+        f.player.playFrom(ListSource("A", listOf(song)), 0)
+        awaitUntil("window pushed") { f.controller.windows.isNotEmpty() }
+
+        val entry = f.controller.windows.last().single()
+        assertEquals("Nightswimming", entry.title)
+        assertEquals("R.E.M.", entry.artist)
+        assertEquals("Automatic", entry.album)
+        f.player.release()
+    }
 
     @Test
     fun `an uncached track streams via its self-authenticating URL`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
 
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
-        val played = f.controller.played.single()
+        val played = f.controller.nowPlaying!!.source
         assertTrue(played is AudioSource.Remote, "uncached tracks must stream")
         assertEquals("a1", playedId(played))
         f.player.release()
@@ -113,22 +172,23 @@ class PlayerTest {
         f.cache.prefetch(listOf(track("a1")))
 
         f.player.playFrom(ListSource("A", listOf(track("a1"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
-        assertTrue(f.controller.played.single() is AudioSource.Local, "cached tracks must play from disk")
+        assertTrue(f.controller.nowPlaying!!.source is AudioSource.Local, "cached tracks must play from disk")
         f.player.release()
     }
 
     @Test
-    fun `completion advances to the next track automatically`() = runBlocking {
+    fun `the queue cursor follows the player advancing through the window on its own`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
-        f.controller.completeCurrent()
-        awaitUntil("auto-advance") { f.controller.played.size == 2 }
+        f.controller.completeCurrent() // the detached player moved on by itself
 
-        assertEquals("a2", playedId(f.controller.played.last()))
+        awaitUntil("cursor follows") { f.player.current.value?.id == "a2" }
+        assertEquals("a2", f.controller.nowPlayingId())
+        assertEquals(1, f.controller.windows.size, "an ordinary advance must not re-point playback")
         f.player.release()
     }
 
@@ -136,15 +196,15 @@ class PlayerTest {
     fun `skipPrevious always steps back through history regardless of position`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
         f.controller.completeCurrent()
-        awaitUntil("auto-advance") { f.controller.played.size == 2 }
+        awaitUntil("auto-advance") { f.player.current.value?.id == "a2" }
 
         f.controller.setPosition(5_000) // deep into the song — must still go BACK, never restart
         f.player.skipPrevious()
-        awaitUntil("previous") { f.controller.played.size == 3 }
+        awaitUntil("previous") { f.controller.nowPlayingId() == "a1" }
 
-        assertEquals("a1", playedId(f.controller.played.last()))
+        assertEquals("a1", f.player.current.value?.id)
         f.player.release()
     }
 
@@ -152,15 +212,13 @@ class PlayerTest {
     fun `skipPrevious steps back through history when just started`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
         f.controller.completeCurrent()
-        awaitUntil("auto-advance") { f.controller.played.size == 2 }
+        awaitUntil("auto-advance") { f.player.current.value?.id == "a2" }
 
         f.controller.setPosition(1_000)
         f.player.skipPrevious()
-        awaitUntil("previous") { f.controller.played.size == 3 }
-
-        assertEquals("a1", playedId(f.controller.played.last()))
+        awaitUntil("previous") { f.controller.nowPlayingId() == "a1" }
         f.player.release()
     }
 
@@ -171,7 +229,7 @@ class PlayerTest {
         f.player.addToQueue(track("x")) // nothing is playing
         awaitUntil("queued") { f.player.upcomingIds() == listOf("x") }
 
-        assertTrue(f.controller.played.isEmpty(), "nothing may start on its own")
+        assertTrue(f.controller.windows.isEmpty(), "nothing may start on its own")
         assertTrue(f.engine.requestHistory.isEmpty(), "idle queueing must not prefetch or stream")
         f.player.release()
     }
@@ -180,7 +238,7 @@ class PlayerTest {
     fun `stop kills playback but retains the queue with the stopped song at front`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
         f.player.addToQueue(track("x"))
 
         f.player.stop()
@@ -192,16 +250,32 @@ class PlayerTest {
     }
 
     @Test
-    fun `adding to the queue while playing only queues`() = runBlocking {
+    fun `adding to the queue while playing never restarts the current song`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
         f.player.addToQueue(track("x"))
         awaitUntil("queued") { f.player.upcomingIds().firstOrNull() == "x" }
-        delay(100) // give any (wrong) playback a chance to happen
+        delay(100) // give any (wrong) re-point a chance to happen
 
-        assertEquals(1, f.controller.played.size, "the current song must keep playing")
+        assertEquals(1, f.controller.windows.size, "re-pointing mid-song would restart it")
+        assertEquals("a1", f.controller.nowPlayingId(), "the current song must keep playing")
+        f.player.release()
+    }
+
+    @Test
+    fun `a queue edit reaches the detached player at the next track boundary`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+
+        f.player.addToQueue(track("x")) // Play Next: x must play before a2
+        awaitUntil("queued") { f.player.upcomingIds().firstOrNull() == "x" }
+        f.controller.completeCurrent()
+
+        awaitUntil("edited window pushed") { f.controller.nowPlayingId() == "x" }
+        assertEquals("x", f.player.current.value?.id)
         f.player.release()
     }
 
@@ -209,22 +283,20 @@ class PlayerTest {
     fun `the queue resumes via playNextInQueue after it ends`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
         f.controller.completeCurrent()
         awaitUntil("stop at end") { f.controller.stopped }
 
         f.player.addToQueue(track("x"))
         delay(100)
-        assertEquals(1, f.controller.played.size, "adding must not auto-play")
+        assertEquals(1, f.controller.windows.size, "adding must not auto-play")
         assertEquals(null, f.player.current.value, "a finished song leaves now-playing")
 
         f.player.playNextInQueue()
-        awaitUntil("resume") { f.controller.played.size == 2 }
-        assertEquals("x", playedId(f.controller.played.last()))
+        awaitUntil("resume") { f.controller.nowPlayingId() == "x" }
 
         f.player.skipPrevious()
-        awaitUntil("previous") { f.controller.played.size == 3 }
-        assertEquals("a1", playedId(f.controller.played.last()), "the finished song must be in history")
+        awaitUntil("previous") { f.controller.nowPlayingId() == "a1" }
         f.player.release()
     }
 
@@ -232,17 +304,17 @@ class PlayerTest {
     fun `repeat ONE replays on completion but the next button still advances`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
         f.player.cycleRepeat() // OFF → ALL
         f.player.cycleRepeat() // ALL → ONE
         f.controller.completeCurrent()
-        awaitUntil("replay") { f.controller.played.size == 2 }
-        assertEquals("a1", playedId(f.controller.played.last()), "natural completion must replay")
+        awaitUntil("replay") { f.controller.nowPlayingId() == "a1" }
+        assertEquals("a1", f.player.current.value?.id, "natural completion must replay")
 
         f.player.skipNext()
-        awaitUntil("user skip") { f.controller.played.size == 3 }
-        assertEquals("a2", playedId(f.controller.played.last()), "the next button must escape Repeat One")
+        awaitUntil("user skip") { f.controller.nowPlayingId() == "a2" }
+        assertEquals("a2", f.player.current.value?.id, "the next button must escape Repeat One")
         f.player.release()
     }
 
@@ -264,7 +336,7 @@ class PlayerTest {
     fun `queue edits re-aim the rolling prefetch window`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
         f.player.addToQueue(track("x")) // now up next — the prefetch window must include it
         awaitUntil("x prefetched") {
@@ -277,12 +349,32 @@ class PlayerTest {
     fun `reaching the end of the queue stops playback`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"))), 0)
-        awaitUntil("first play") { f.controller.played.size == 1 }
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
         f.controller.completeCurrent()
         awaitUntil("stop") { f.controller.stopped }
 
-        assertEquals(1, f.controller.played.size, "nothing further must play")
+        assertEquals(1, f.controller.windows.size, "nothing further must play")
+        assertEquals(null, f.player.current.value, "a finished queue leaves now-playing")
+        f.player.release()
+    }
+
+    @Test
+    fun `a long queue is refilled before the detached player runs out of window`() = runBlocking {
+        val f = Fixture(this)
+        val songs = (1..Player.WINDOW_DEPTH + 10).map { track("a$it") }
+        f.player.playFrom(ListSource("A", songs), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+        assertEquals(Player.WINDOW_DEPTH, f.controller.windows.last().size, "the window is bounded")
+
+        repeat(Player.WINDOW_DEPTH - Player.REFILL_THRESHOLD) { f.controller.completeCurrent() }
+
+        awaitUntil("refilled") { f.controller.windows.size == 2 }
+        assertEquals(
+            "a${Player.WINDOW_DEPTH - Player.REFILL_THRESHOLD + 1}",
+            f.controller.nowPlayingId(),
+            "the refilled window must open on the track that is playing",
+        )
         f.player.release()
     }
 }

@@ -1,5 +1,10 @@
 # Playback: a PlaybackController seam, deferring the audio last-mile to LightOS
 
+> **Superseded in part by [ADR-0003](0003-detached-audio-window-seam.md).** The bet paid off: Light
+> shipped the tool-owned shape, so the seam's implementation swapped from the `MediaPlayer` shim to
+> the SDK's detached player and the seam itself became window-shaped. The reasoning below is kept
+> as the record of why everything above the seam was built design-independently.
+
 The Light SDK sanctions no audio primitive today (no `FOREGROUND_SERVICE`; `android.app.*`,
 `Service`, and `getSystemService()` are blocked by the build plugin), but Light has publicly
 committed (discussions #38, #70) to a first-class audio API as their top priority — with two

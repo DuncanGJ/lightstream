@@ -267,4 +267,40 @@ class QueueTest {
 
         assertEquals((0 until 7).map { "s$it" }, played, "should walk the whole paged library then stop")
     }
+
+    @Test
+    fun `the playback window opens on the current track and runs into the source`() = runBlocking {
+        val queue = Queue()
+        queue.start(ListSource("A", listOf(track("a1"), track("a2"), track("a3"))), 0)
+
+        assertEquals(
+            listOf("a1", "a2", "a3"),
+            queue.playbackWindow(5).map { it.id },
+            "the detached player must be handed the current track plus what follows it",
+        )
+    }
+
+    @Test
+    fun `repeat ONE fills the playback window with the current track`() = runBlocking {
+        val queue = Queue(repeat = { RepeatMode.ONE })
+        queue.start(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+
+        assertEquals(
+            listOf("a1", "a1", "a1"),
+            queue.playbackWindow(3).map { it.id },
+            "a detached player with no tool attached must keep replaying the repeated track",
+        )
+    }
+
+    @Test
+    fun `repeat ALL wraps the playback window back to the top of the source`() = runBlocking {
+        val queue = Queue(repeat = { RepeatMode.ALL })
+        queue.start(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+
+        assertEquals(
+            listOf("a1", "a2", "a1", "a2"),
+            queue.playbackWindow(4).map { it.id },
+            "the window must wrap, or detached playback would stop at the end of the source",
+        )
+    }
 }

@@ -14,15 +14,16 @@ import com.thelightphone.music.app.MusicApp
 import com.thelightphone.sdk.InitialScreen
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
+import com.thelightphone.sdk.audio.DefaultLightAudio
 import com.thelightphone.sdk.ui.LightText
 import com.thelightphone.sdk.ui.LightTextVariant
 
 /** The iPod-style hub: drill into Artists / Albums / Playlists, or jump to Search / Now Playing. */
 @InitialScreen
-class HomeScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>(sealedActivity) {
+class HomeScreen(private val sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>(sealedActivity) {
 
     override fun willShow() {
-        MusicApp.start(lightContext)
+        MusicApp.start(lightContext, DefaultLightAudio(sealedActivity))
     }
 
     @Composable

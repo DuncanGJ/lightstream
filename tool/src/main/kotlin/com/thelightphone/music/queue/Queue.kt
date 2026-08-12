@@ -183,6 +183,38 @@ class Queue(
     /** The next [n] upcoming tracks — the rolling prefetch window. */
     suspend fun upcoming(n: Int): List<Track> = upcomingItems(n).map { it.track }
 
+    /**
+     * The next [n] tracks in the order they will actually play, current first — the window handed
+     * to the detached player, which advances through it on its own once the tool screen is gone.
+     */
+    suspend fun playbackWindow(n: Int): List<Track> {
+        val current = _current.value ?: return emptyList()
+        if (repeat() == RepeatMode.ONE) return List(n) { current }
+        val window = ArrayList<Track>(n)
+        window.add(current)
+        window.addAll(upcoming(n - 1))
+        if (repeat() == RepeatMode.ALL && window.size < n) {
+            val lap = sourceLap()
+            var i = 0
+            while (lap.isNotEmpty() && window.size < n) {
+                window.add(lap[i % lap.size])
+                i++
+            }
+        }
+        return window
+    }
+
+    /** The source's playable tracks from the top — one wrap of Repeat ALL. Empty if unbounded. */
+    private suspend fun sourceLap(): List<Track> {
+        val size = source.size ?: return emptyList()
+        val lap = ArrayList<Track>(size)
+        for (i in 0 until size) {
+            val t = source.get(i) ?: break
+            if (t.id !in skippedIds) lap.add(t)
+        }
+        return lap
+    }
+
     /** Remove the item at [index] of the [upcomingItems] view. Source items go to the skip-set. */
     suspend fun removeUpcoming(index: Int) {
         if (index < 0) return

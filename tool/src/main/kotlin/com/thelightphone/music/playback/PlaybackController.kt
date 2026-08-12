@@ -17,28 +17,47 @@ data class PlaybackState(
 )
 
 /**
- * The playback seam (ADR-0002). Everything above it — queue, cache, UI — is design-independent;
- * only the implementation below it changes when LightOS ships its sanctioned audio API. The
- * current implementation ([MediaPlayerController]) is a disposable foreground-only shim.
+ * One entry of the window handed to the player: the bytes to play plus what the platform's
+ * now-playing surfaces (lock screen, Bluetooth, LightOS) display while it plays.
+ */
+data class PlayableTrack(
+    val source: AudioSource,
+    val title: String,
+    val artist: String?,
+    val album: String?,
+    val durationMs: Long?,
+)
+
+/**
+ * The playback seam (ADR-0002, ADR-0003). Everything above it — queue, cache, UI — is
+ * design-independent; only the implementation below it changes with the platform's audio API.
+ * [LightAudioPlaybackController] is the real one, backed by the SDK's detached player.
  *
- * Contract for adapters (the future LightOS one included):
- * - [onCompletion] must be assigned BEFORE the first [play]; a completion that fires with no
- *   handler is dropped and the queue silently stops advancing. It may be invoked on the
- *   implementation's own thread.
- * - Construct on the main thread unless the adapter documents otherwise (the MediaPlayer shim
- *   delivers callbacks on its creating thread).
+ * The seam is *window*-shaped rather than track-shaped: the [Player] hands over the current track
+ * plus what follows it, and the implementation walks that window by itself. That is what keeps
+ * music going once the tool screen is gone — an implementation that had to be called back into
+ * the tool for every track would fall silent the moment the tool stopped running.
+ *
+ * Contract for adapters:
+ * - [onAdvance] and [onWindowEnd] must be assigned BEFORE the first [play]; a callback that fires
+ *   with no handler is dropped and the queue silently stops following playback. Either may be
+ *   invoked on the implementation's own thread.
+ * - Construct on the main thread unless the adapter documents otherwise.
  */
 interface PlaybackController {
     val state: StateFlow<PlaybackState>
 
-    /** Load and begin playing [source] from the start. */
-    fun play(source: AudioSource)
+    /** Replace what is queued for playback with [window], starting at its first entry. */
+    fun play(window: List<PlayableTrack>)
     fun pause()
     fun resume()
     fun stop()
 
-    /** Invoked when the current source finishes on its own — used to advance the queue. */
-    var onCompletion: (() -> Unit)?
+    /** The player moved to `window[index]` on its own — used to follow it with the queue cursor. */
+    var onAdvance: ((index: Int) -> Unit)?
+
+    /** The player reached the end of the window and stopped. */
+    var onWindowEnd: (() -> Unit)?
 
     fun release()
 }

@@ -11,11 +11,12 @@ import com.thelightphone.music.cache.MetadataDatabase
 import com.thelightphone.music.cache.TrackCache
 import com.thelightphone.music.library.LibraryRepository
 import com.thelightphone.music.playback.AudioSource
-import com.thelightphone.music.playback.MediaPlayerController
+import com.thelightphone.music.playback.LightAudioPlaybackController
 import com.thelightphone.music.playback.Player
 import com.thelightphone.music.subsonic.SubsonicClient
 import com.thelightphone.music.subsonic.SubsonicCredentials
 import com.thelightphone.sdk.SealedLightContext
+import com.thelightphone.sdk.audio.LightAudio
 import com.thelightphone.sdk.buildDatabase
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -73,6 +74,9 @@ object MusicApp : AppControl {
     private lateinit var cacheDir: File
     private lateinit var dataStore: DataStore<Preferences>
 
+    /** The SDK audio factory, captured from the first screen — detached playback outlives it. */
+    private lateinit var audio: LightAudio
+
     private val _session = MutableStateFlow<Session?>(null)
     override val session: StateFlow<Session?> = _session
 
@@ -84,9 +88,10 @@ object MusicApp : AppControl {
     private val _tunables = MutableStateFlow(Tunables())
     val tunables: StateFlow<Tunables> = _tunables
 
-    fun start(context: SealedLightContext) {
+    fun start(context: SealedLightContext, audio: LightAudio) {
         if (started) return
         started = true
+        this.audio = audio
         http = HttpClient(OkHttp)
         db = context.buildDatabase(CacheDatabase::class.java, "trackcache.db")
         metadataDb = context.buildDatabase(MetadataDatabase::class.java, "metadata.db")
@@ -142,7 +147,7 @@ object MusicApp : AppControl {
         )
         val player = Player(
             cache,
-            MediaPlayerController(),
+            LightAudioPlaybackController(audio, appScope),
             appScope,
             prefetchDepth = { _tunables.value.prefetchDepth },
             resolveRemote = { AudioSource.Remote(client.streamUrl(it)) },
