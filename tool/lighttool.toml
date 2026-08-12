@@ -4,5 +4,9 @@ label = "LightDrome"
 versionCode = 1
 versionName = "0.1.0"
 permissions = ["android.permission.INTERNET"]
+# Detached playback: the SDK's tool-owned MediaSessionService keeps music going after the
+# tool screen is gone. The plugin turns this into the foreground-service permissions,
+# the capability marker, and the <service> declaration (docs/design_decisions/detached_audio.md).
+capabilities = ["detached-audio"]
 # "com.lightos" = real LP3 hardware; use "com.thelightphone.sdk.emulator" for emulator dev
 serverPackage = "com.lightos"
