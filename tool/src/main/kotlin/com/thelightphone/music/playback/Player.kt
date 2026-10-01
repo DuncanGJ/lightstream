@@ -68,12 +68,33 @@ class Player(
         }
     }
 
+    /**
+     * Play/pause, and on a failed track **retry**: the window is re-pushed from the current cursor,
+     * which also re-resolves every entry — a track whose download finished since now plays from
+     * the cache. Nothing skips on its own (unplayable content would loop); next is a button away.
+     */
     fun togglePlayPause() {
         when (state.value.status) {
             PlaybackStatus.PLAYING -> controller.pause()
             PlaybackStatus.PAUSED -> controller.resume()
+            PlaybackStatus.ERROR -> if (queue.current.value != null) scope.launch { pushWindow() }
             else -> Unit
         }
+    }
+
+    /** Scrub within the current track; a no-op with nothing playing. */
+    fun seekTo(positionMs: Int) {
+        if (queue.current.value == null) return
+        controller.seekTo(positionMs)
+    }
+
+    /** The 15-second nudges. Clamped here, from the state the UI already shows, so the seam stays one `seekTo`. */
+    fun skipForward() = nudge(NUDGE_MS)
+    fun skipBack() = nudge(-NUDGE_MS)
+
+    private fun nudge(deltaMs: Int) {
+        val s = state.value
+        seekTo(nudgedPosition(s.positionMs, s.durationMs, deltaMs))
     }
 
     /** The next button: always advances — Repeat ONE only bites on natural completion. */
@@ -225,8 +246,15 @@ class Player(
 
         /** Refill once this few entries are left, so the player never runs the window dry. */
         const val REFILL_THRESHOLD = 10
+
+        /** How far the skip-back / skip-forward buttons move, matching the SDK player's own nudge. */
+        const val NUDGE_MS = 15_000
     }
 }
+
+/** Where a nudge lands: clamped to the track, and to zero while the duration is still unknown. */
+internal fun nudgedPosition(positionMs: Int, durationMs: Int, deltaMs: Int): Int =
+    (positionMs + deltaMs).coerceIn(0, durationMs.coerceAtLeast(0))
 
 /** The library's duration, in the milliseconds the platform's now-playing surfaces expect. */
 private fun Track.durationMs(): Long? = durationSec?.let { it * 1000L }

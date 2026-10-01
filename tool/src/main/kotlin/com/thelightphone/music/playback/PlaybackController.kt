@@ -10,10 +10,27 @@ sealed interface AudioSource {
 
 enum class PlaybackStatus { IDLE, BUFFERING, PLAYING, PAUSED, ENDED, ERROR }
 
+/** Why playback stopped, at the granularity the UI can phrase and the user can act on. */
+enum class PlaybackErrorKind {
+    /** Network or file I/O: the stream URL did not answer, or the cache file is gone. Retry-able. */
+    SOURCE,
+    /** Container or codec the device cannot decode. Skip it. */
+    UNSUPPORTED,
+    /** The audio output could not be opened. */
+    OUTPUT,
+    /** The platform player handle is gone; nothing will play until a new one is made. */
+    UNAVAILABLE,
+    UNKNOWN,
+}
+
+data class PlaybackError(val kind: PlaybackErrorKind, val diagnostic: String)
+
 data class PlaybackState(
     val status: PlaybackStatus = PlaybackStatus.IDLE,
     val positionMs: Int = 0,
     val durationMs: Int = 0,
+    /** Set exactly when [status] is [PlaybackStatus.ERROR]. */
+    val error: PlaybackError? = null,
 )
 
 /**
@@ -52,6 +69,9 @@ interface PlaybackController {
     fun pause()
     fun resume()
     fun stop()
+
+    /** Move within the current entry. Clamped to the entry by the implementation. */
+    fun seekTo(positionMs: Int)
 
     /** The player moved to `window[index]` on its own — used to follow it with the queue cursor. */
     var onAdvance: ((index: Int) -> Unit)?

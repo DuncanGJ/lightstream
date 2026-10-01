@@ -70,9 +70,21 @@ private class FakePlaybackController : PlaybackController {
     override fun pause() { _state.value = _state.value.copy(status = PlaybackStatus.PAUSED) }
     override fun resume() { _state.value = _state.value.copy(status = PlaybackStatus.PLAYING) }
     override fun stop() { stopped = true; _state.value = PlaybackState() }
+    override fun seekTo(positionMs: Int) {
+        seeks.add(positionMs)
+        _state.value = _state.value.copy(positionMs = positionMs.coerceIn(0, _state.value.durationMs))
+    }
     override fun release() {}
 
+    /** Every seek the player asked for, unclamped — the seam hands over what the tool decided. */
+    val seeks = mutableListOf<Int>()
+
     fun setPosition(ms: Int) { _state.value = _state.value.copy(positionMs = ms) }
+
+    /** The current entry failed: like the SDK, the player stops rather than advancing. */
+    fun fail(kind: PlaybackErrorKind) {
+        _state.value = _state.value.copy(status = PlaybackStatus.ERROR, error = PlaybackError(kind, "TEST"))
+    }
 
     /** The current entry finishes: the player steps through its window, or runs out of it. */
     fun completeCurrent() {
@@ -375,6 +387,70 @@ class PlayerTest {
             f.controller.nowPlayingId(),
             "the refilled window must open on the track that is playing",
         )
+        f.player.release()
+    }
+
+    @Test
+    fun `seeking moves within the current track without re-pointing the window`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+
+        f.player.seekTo(42_000)
+        awaitUntil("seek reached the player") { f.player.state.value.positionMs == 42_000 }
+
+        assertEquals(listOf(42_000), f.controller.seeks)
+        assertEquals(1, f.controller.windows.size, "a seek must never restart the window")
+        assertEquals("a1", f.controller.nowPlayingId())
+        f.player.release()
+    }
+
+    @Test
+    fun `skip forward and back nudge the position by fifteen seconds`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+        f.controller.setPosition(30_000)
+
+        f.player.skipForward()
+        awaitUntil("forward") { f.player.state.value.positionMs == 45_000 }
+        f.player.skipBack()
+        awaitUntil("back") { f.player.state.value.positionMs == 30_000 }
+
+        assertEquals(listOf(45_000, 30_000), f.controller.seeks)
+        assertEquals(1, f.controller.windows.size, "nudging must never restart the window")
+        f.player.release()
+    }
+
+    @Test
+    fun `nudges clamp to the track bounds`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"))), 0) // fake duration: 100s
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+
+        f.controller.setPosition(5_000)
+        f.player.skipBack()
+        awaitUntil("clamped at start") { f.controller.seeks == listOf(0) }
+
+        f.controller.setPosition(95_000)
+        f.player.skipForward()
+        awaitUntil("clamped at end") { f.controller.seeks == listOf(0, 100_000) }
+        f.player.release()
+    }
+
+    @Test
+    fun `play on a failed track retries it rather than skipping`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+
+        f.controller.fail(PlaybackErrorKind.SOURCE) // the stream URL did not answer
+        awaitUntil("error surfaced") { f.player.state.value.error?.kind == PlaybackErrorKind.SOURCE }
+        f.player.togglePlayPause()
+
+        awaitUntil("retried") { f.controller.windows.size == 2 }
+        assertEquals("a1", f.controller.nowPlayingId(), "the failed track is retried, not skipped")
+        assertEquals(PlaybackStatus.PLAYING, f.player.state.value.status)
         f.player.release()
     }
 }

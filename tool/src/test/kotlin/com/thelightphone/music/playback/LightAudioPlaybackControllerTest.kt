@@ -1,5 +1,8 @@
 package com.thelightphone.music.playback
 
+import com.thelightphone.sdk.audio.LightAudioError
+import com.thelightphone.sdk.audio.LightAudioErrorKind
+import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -17,7 +20,8 @@ class LightAudioPlaybackControllerTest {
             index = NO_QUEUE_ITEM,
             positionMs = 0,
             durationMs = 0,
-            hasError = false,
+            error = null,
+            availability = LightAudioPlayerAvailability.Ready,
             windowSize = 0,
             awaitingStart = false,
         )
@@ -32,7 +36,8 @@ class LightAudioPlaybackControllerTest {
             index = 0,
             positionMs = 42_000,
             durationMs = 180_000,
-            hasError = false,
+            error = null,
+            availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
             awaitingStart = false,
         )
@@ -49,7 +54,8 @@ class LightAudioPlaybackControllerTest {
             index = 0,
             positionMs = 0,
             durationMs = 0,
-            hasError = false,
+            error = null,
+            availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
             awaitingStart = true,
         )
@@ -64,7 +70,8 @@ class LightAudioPlaybackControllerTest {
             index = 2,
             positionMs = 180_000,
             durationMs = 180_000,
-            hasError = false,
+            error = null,
+            availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
             awaitingStart = false,
         )
@@ -79,7 +86,8 @@ class LightAudioPlaybackControllerTest {
             index = 0,
             positionMs = 180_000,
             durationMs = 180_000,
-            hasError = false,
+            error = null,
+            availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
             awaitingStart = false,
         )
@@ -94,11 +102,49 @@ class LightAudioPlaybackControllerTest {
             index = 1,
             positionMs = 42_000,
             durationMs = 180_000,
-            hasError = false,
+            error = null,
+            availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
             awaitingStart = false,
         )
 
         assertEquals(PlaybackStatus.PAUSED, state.status)
+    }
+
+    @Test
+    fun `a failed stream reports what went wrong so the user can act on it`() {
+        val state = playbackStateOf(
+            isPlaying = false,
+            index = 1,
+            positionMs = 0,
+            durationMs = 0,
+            error = LightAudioError(LightAudioErrorKind.Source, "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED", itemIndex = 1),
+            availability = LightAudioPlayerAvailability.Ready,
+            windowSize = 3,
+            awaitingStart = true, // the handover never produced sound — the error wins over buffering
+        )
+
+        assertEquals(PlaybackStatus.ERROR, state.status)
+        assertEquals(
+            PlaybackError(PlaybackErrorKind.SOURCE, "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"),
+            state.error,
+        )
+    }
+
+    @Test
+    fun `a released player handle is unavailable, not merely idle`() {
+        val state = playbackStateOf(
+            isPlaying = false,
+            index = NO_QUEUE_ITEM,
+            positionMs = 0,
+            durationMs = 0,
+            error = null,
+            availability = LightAudioPlayerAvailability.Released,
+            windowSize = 0,
+            awaitingStart = false,
+        )
+
+        assertEquals(PlaybackStatus.ERROR, state.status, "idle would invite a play() that can never be honoured")
+        assertEquals(PlaybackErrorKind.UNAVAILABLE, state.error?.kind)
     }
 }

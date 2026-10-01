@@ -90,9 +90,11 @@ by a **paged empty-query `search3`** (Navidrome returns the whole library pagina
 lazily as a sliding-window [[Source]].
 
 ### Now Playing
-The tool's home base — the current track plus transport controls. Shown first when the tool
-opens if something is playing. A dedicated [[Browse]] screen (not a modal), reachable from
-anywhere via a small shared bottom-bar affordance.
+The tool's home base — the current track plus transport controls: previous / next, play-pause,
+15-second nudges, a drag-to-seek scrubber, repeat, stop. Shown first when the tool opens if
+something is playing. A dedicated [[Browse]] screen (not a modal), reachable from anywhere via a
+small shared bottom-bar affordance. When a track fails it says *why* (connection, format, output)
+and what the buttons can do about it; play on a failed track retries it, nothing skips on its own.
 
 ### Source
 The ordered list a play action was launched from: an album's tracks, an artist's songs, "all

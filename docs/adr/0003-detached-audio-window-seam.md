@@ -56,6 +56,30 @@ handover of ownership.
   pass. Bytes are not wasted (the cache is populated by stream-and-save anyway), but the window
   is one more reason the prefetch depth matters.
 
+## Transport controls and failures (added with light-sdk 0.1.2)
+
+The SDK player's transport surface is wider than play/pause/next: `seekTo`, 15-second
+`skipBack`/`skipForward`, and an observed, *classified* `LightAudioError` plus a connection
+`availability`. The seam grew by exactly one method, `seekTo(positionMs)`; everything else is
+derived on the tool's side so the seam stays small and the Player stays the one owner:
+
+- **Nudges are a Player concern, not a seam one.** `Player.skipBack/skipForward` clamp 15 s against
+  the position and duration the UI already shows and call `seekTo`. The SDK has its own nudges, but
+  routing them through the seam would make the fake in tests encode SDK clamping rules.
+- **Errors are typed, not boolean.** `PlaybackState.error` carries a `PlaybackErrorKind`
+  (`SOURCE`, `UNSUPPORTED`, `OUTPUT`, `UNAVAILABLE`, `UNKNOWN`) mapped from the SDK's kinds. The UI
+  phrases each as product copy that names what the on-screen buttons can do about it.
+- **No auto-skip on failure.** The SDK deliberately stops rather than advancing (unplayable content
+  would loop); the tool follows suit. Play on an errored track **retries** it: the window is
+  re-pushed from the current cursor, which also re-resolves the source, so a track whose download
+  finished in the meantime now plays from the cache.
+- **A released handle is `UNAVAILABLE`, not idle.** The SDK releases the player itself when the
+  detached controller never connects, and throws on any later command. The reducer maps
+  `availability == Released` to an `ERROR/UNAVAILABLE` state ahead of everything else, and the
+  adapter drops commands on a released handle instead of crashing the tool.
+- **Scrubbing** uses the SDK UI's `LightTouchableProgressBar`; a drag maps the fraction onto the
+  resolved duration and lands on zero while the duration is still unknown.
+
 ## Known gaps
 
 - An external "previous" (headset, Bluetooth) re-syncs the cursor rather than walking the tool's

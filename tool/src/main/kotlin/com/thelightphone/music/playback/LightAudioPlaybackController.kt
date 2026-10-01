@@ -1,9 +1,12 @@
 package com.thelightphone.music.playback
 
 import com.thelightphone.sdk.audio.LightAudio
+import com.thelightphone.sdk.audio.LightAudioError
+import com.thelightphone.sdk.audio.LightAudioErrorKind
 import com.thelightphone.sdk.audio.LightAudioItem
 import com.thelightphone.sdk.audio.LightAudioPlayback
 import com.thelightphone.sdk.audio.LightAudioPlayer
+import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightAudioUsage
 import com.thelightphone.sdk.audio.LightMediaMetadata
@@ -60,26 +63,28 @@ class LightAudioPlaybackController(
         val index: Int,
         val positionMs: Long,
         val durationMs: Long,
-        val hasError: Boolean,
+        val error: LightAudioError?,
     )
 
     private val mirror: Job = scope.launch {
-        combine(
+        val snapshots = combine(
             player.isPlaying,
             player.currentMediaItemIndex,
             player.positionMs,
             player.durationMs,
             player.error,
         ) { isPlaying, index, positionMs, durationMs, error ->
-            Snapshot(isPlaying, index, positionMs, durationMs, error != null)
-        }.collect { snapshot ->
+            Snapshot(isPlaying, index, positionMs, durationMs, error)
+        }
+        combine(snapshots, player.availability, ::Pair).collect { (snapshot, availability) ->
             if (snapshot.isPlaying) awaitingStart = false
             _state.value = playbackStateOf(
                 isPlaying = snapshot.isPlaying,
                 index = snapshot.index,
                 positionMs = snapshot.positionMs,
                 durationMs = snapshot.durationMs,
-                hasError = snapshot.hasError,
+                error = snapshot.error,
+                availability = availability,
                 windowSize = windowSize,
                 awaitingStart = awaitingStart,
             )
@@ -118,15 +123,28 @@ class LightAudioPlaybackController(
         }
     }
 
-    override fun pause() = player.pause()
+    override fun pause() = ifLive { it.pause() }
 
-    override fun resume() = player.play()
+    override fun resume() = ifLive { it.play() }
+
+    override fun seekTo(positionMs: Int) = ifLive { it.seekTo(positionMs.toLong()) }
 
     override fun stop() {
         windowSize = 0
         lastIndex = NO_QUEUE_ITEM
-        player.stop()
-        player.setMediaQueue(emptyList())
+        ifLive {
+            it.stop()
+            it.setMediaQueue(emptyList())
+        }
+    }
+
+    /**
+     * The SDK throws on any command after the handle is released (which it does itself if the
+     * detached controller never connects). The state already says UNAVAILABLE; a button press
+     * must not also crash the tool.
+     */
+    private inline fun ifLive(command: (LightAudioPlayer) -> Unit) {
+        if (player.availability.value != LightAudioPlayerAvailability.Released) command(player)
     }
 
     /**
@@ -142,8 +160,11 @@ class LightAudioPlaybackController(
 }
 
 /**
- * Reduce the SDK player's five state flows into the tool's one [PlaybackState].
+ * Reduce the SDK player's six state flows into the tool's one [PlaybackState].
  *
+ * A released handle wins over everything: the SDK releases the player itself when the detached
+ * controller fails to connect, and from then on nothing can play, so reporting IDLE would invite
+ * a `play()` that is never honoured.
  * The SDK reports no explicit end-of-queue, so the end of the window is inferred: the last entry,
  * not playing, parked at its own duration. [awaitingStart] covers the gap between handing over a
  * window and the session actually producing sound, which reads as buffering.
@@ -153,12 +174,19 @@ internal fun playbackStateOf(
     index: Int,
     positionMs: Long,
     durationMs: Long,
-    hasError: Boolean,
+    error: LightAudioError?,
+    availability: LightAudioPlayerAvailability,
     windowSize: Int,
     awaitingStart: Boolean,
 ): PlaybackState {
+    if (availability == LightAudioPlayerAvailability.Released) {
+        return PlaybackState(
+            status = PlaybackStatus.ERROR,
+            error = PlaybackError(PlaybackErrorKind.UNAVAILABLE, "PLAYER_RELEASED"),
+        )
+    }
     val status = when {
-        hasError -> PlaybackStatus.ERROR
+        error != null -> PlaybackStatus.ERROR
         index == NO_QUEUE_ITEM -> PlaybackStatus.IDLE
         isPlaying -> PlaybackStatus.PLAYING
         awaitingStart -> PlaybackStatus.BUFFERING
@@ -169,8 +197,19 @@ internal fun playbackStateOf(
         status = status,
         positionMs = positionMs.toInt(),
         durationMs = durationMs.toInt(),
+        error = error?.toPlaybackError(),
     )
 }
+
+private fun LightAudioError.toPlaybackError() = PlaybackError(
+    kind = when (kind) {
+        LightAudioErrorKind.Source -> PlaybackErrorKind.SOURCE
+        LightAudioErrorKind.Unsupported -> PlaybackErrorKind.UNSUPPORTED
+        LightAudioErrorKind.Output -> PlaybackErrorKind.OUTPUT
+        LightAudioErrorKind.Unknown -> PlaybackErrorKind.UNKNOWN
+    },
+    diagnostic = diagnostic,
+)
 
 private fun atEndOfWindow(index: Int, windowSize: Int, positionMs: Long, durationMs: Long): Boolean =
     index == windowSize - 1 && durationMs > 0 && positionMs >= durationMs - END_OF_ITEM_TOLERANCE_MS
