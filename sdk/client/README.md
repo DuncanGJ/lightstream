@@ -263,6 +263,170 @@ capture.asFlow().collect { pcm ->
 - A capture startup failure throws `LightAudioCaptureException` from collection.
 - Set `CaptureConfig.source` to `Unprocessed` to request raw input when supported; `Mic` uses the standard processed microphone path.
 
+### NFC
+
+`LightNfc` reads NFC tags — and other phones presenting a tag — while your tool is in the foreground.
+Declare the permission in `lighttool.toml`; the plugin emits the matching `<uses-feature android:name="android.hardware.nfc" android:required="false" />` for you, so phones without NFC are never filtered out of the store listing.
+
+```toml
+permissions = ["android.permission.NFC"]
+```
+
+#### Availability
+
+`LightNfc` is a factory constructed from the `SealedLightActivity` your screen already receives. `availability` is read again on every access, because NFC can be switched on or off in Settings while your tool is backgrounded.
+
+```kotlin
+val nfc: LightNfc = DefaultLightNfc(sealedActivity)
+
+val prompt = when (nfc.availability) {
+    LightNfcAvailability.Ready -> "Hold your phone near the other device."
+    LightNfcAvailability.Disabled -> "Turn on NFC in Settings, then try again."
+    LightNfcAvailability.PermissionMissing -> "This tool doesn't have access to NFC."
+    LightNfcAvailability.Unsupported -> "This phone can't use NFC."
+}
+```
+
+- `availability.isReady` is the short form. Gate any tap affordance on it, so a phone without NFC never shows the button.
+- `Unsupported` means no NFC hardware; `Disabled` means the user turned NFC off; `PermissionMissing` means the tool omitted `android.permission.NFC` from `lighttool.toml`, and is logged with that detail.
+- Screens can refresh it from `willShow()`, which runs every time the screen comes back to the front.
+
+#### Reading taps
+
+`LightNfcReader` provides taps as a `Flow<LightNfcTap>`, holding reader mode for as long as it is collected.
+
+```kotlin
+nfc.newReader().asFlow().collect { tap ->
+    val address = tap.uri ?: tap.text
+}
+```
+
+For a one-shot read, `awaitTap()` takes the first tap and stops:
+
+```kotlin
+val tap = nfc.newReader().awaitTap()
+```
+
+- Collection owns reader mode: starting collection arms the reader, or the next time the tool resumes if it is backgrounded; backgrounding disarms it; cancelling releases it.
+- Collection is the boundary, not the screen. A reader collected from a scope that outlives the screen stays armed after the user navigates away, so collect from something that ends with the screen, as `LightNfcTapReader` does.
+- Concurrent collectors share the one reader mode Android grants the Activity: the newest receives taps, earlier ones resume as later ones stop, and the last to stop releases the radio.
+- Release matters: while reader mode is on, no other app sees taps.
+- Every tap carries `serialNumber`, the tag's UID as uppercase hex.
+- `records` holds the decoded NDEF message as `LightNfcRecord.Uri`, `LightNfcRecord.Text`, or `LightNfcRecord.Binary`. `tap.uri` and `tap.text` are shortcuts for the first record of each kind.
+- A tag with no NDEF message — a bare UID badge — reads successfully with an empty `records` list.
+- Failures arrive from collection as a `LightNfcException`: `LightNfcUnavailableException` when NFC is off, absent, not granted to the tool, or couldn't start; `LightNfcReadException` when the tag left the field or its contents couldn't be decoded. The exception message is product copy naming the actual cause.
+- `LightNfcReaderConfig` narrows the technologies polled, skips the platform's NDEF check, silences the platform tap sound, and sets the presence-check delay.
+
+#### Tap prompt
+
+`LightNfcTapReader` is the ready-made counterpart to `LightQrCodeScanner`. It runs the reader while the screen is showing and renders the prompt, so a tool that just needs an address off a tap does not handle availability itself.
+
+```kotlin
+LightNfcTapReader(
+    onTap = { tap -> tap.uri?.let(::onAddressScanned) },
+    onBack = { goBack(Unit) },
+)
+```
+
+### Connectivity
+
+`LightConnectivity` lets you query or monitor your device's network connection state. Use `currentStatus`
+for a single shot query, or `observeNetworkStatus` to get a `Flow` that will update any time the status changes.
+
+```kotlin
+lightConnectivity.observeNetworkStatus().collect {
+    // it.hasWifi
+    // it.isMetered (metered generally means a cellular network that charges for data I/O)
+    // it.isConnected
+}
+```
+
+### Location
+
+Four `LightServiceMethod`s expose the device's location. Unlike Audio and NFC there's no dedicated wrapper class yet — call them directly with `callRemoteServiceMethod` (see [Talking to LightOS](#talking-to-lightos) below).
+
+Declare a location permission in `lighttool.toml` and request it like any other runtime permission (`checkPermission` / `rememberPermissionRequestLauncher`):
+
+```toml
+permissions = ["android.permission.ACCESS_FINE_LOCATION"]
+```
+
+`android.permission.ACCESS_COARSE_LOCATION` is also allowlisted if your tool doesn't need precise coordinates.
+
+#### Reading a location
+
+- `GetDefaultLocation` returns the location the user has configured as their default on the Light dashboard.
+- `GetCurrentLocation` returns the server's best current fix, plus `accuracyMeters` and `timestampMs`.
+
+Both responses report an unknown location as all-`null` fields rather than an error:
+
+```kotlin
+val response = callRemoteServiceMethod(LightServiceMethod.GetCurrentLocation, Unit).getOrNull()
+if (response?.latitude != null && response.longitude != null) {
+    // use response.latitude, response.longitude, response.accuracyMeters, response.timestampMs
+}
+```
+
+A call fails with `LightResult.ErrorCode.NoPermission` if the location permission hasn't been granted.
+
+#### Requesting updates
+
+`RequestLocationUpdates` acquires (or renews) a 30-second(ish) lease - LightOS will start listening for location updates internally and caching the latest value.
+`ReleaseLocationUpdates` gives up the lease. As long as one tool has an active lease, LightOS will be listening for updates. 
+Renew on a timer well before the lease lapses, and always release when your tool no longer needs updates:
+
+```kotlin
+LaunchedEffect(Unit) {
+    coroutineScope {
+        val leaseJob = launch {
+            while (isActive) {
+                callRemoteServiceMethod(LightServiceMethod.RequestLocationUpdates, Unit)
+                delay(20.seconds) // renew before the 30-second lease lapses
+            }
+        }
+        try {
+            while (isActive) {
+                val location = callRemoteServiceMethod(LightServiceMethod.GetCurrentLocation, Unit).getOrNull()
+                // ...
+                delay(2.seconds) // poll however often your tool needs
+            }
+        } finally {
+            leaseJob.cancel()
+            withContext(NonCancellable) {
+                callRemoteServiceMethod(LightServiceMethod.ReleaseLocationUpdates, Unit)
+            }
+        }
+    }
+}
+```
+
+- Wrap the polling loop in `try`/`finally` (with `NonCancellable` around the release call) so navigating away, backgrounding, or any other cancellation still releases the lease instead of leaking it. (Not that big of a deal since the timeout period is short, but battery life is valuable!!)
+- `RequestLocationUpdates` and `ReleaseLocationUpdates` both respond with `Unit` on success.
+- See [`:examples:ui-demo`'s `UiDemoLocationScreen`](../../examples/ui-demo/src/main/kotlin/com/thelightphone/uidemo/UiDemoLocationScreen.kt) for a complete example, including permission handling and re-checking permission when the screen resumes.
+
+#### Setting locations in the emulator
+
+[`:sdk:emulator`](../emulator) has no real GPS to fix from, so its HTTP server ([`EmulatorHttpServer`](../emulator/src/main/kotlin/com/thelightphone/sdk/emulator/http/EmulatorHttpServer.kt)) exposes endpoints to set locations from your host machine:
+
+```bash
+# set the default location
+curl -X POST "http://localhost:8090/location/default?latitude=37.7749&longitude=-122.4194"
+
+# set the current location (accuracyMeters optional, defaults to 0.0)
+curl -X POST "http://localhost:8090/location/current?latitude=37.7749&longitude=-122.4194&accuracyMeters=5.0"
+
+# omit latitude/longitude on either endpoint to clear that location
+curl -X POST "http://localhost:8090/location/current"
+```
+
+If you're running the emulator, don't forget to forward the port first:
+
+```bash
+adb forward tcp:8090 tcp:8090
+```
+
+`/location/current` responds `409 Conflict` unless some tool currently holds an active `RequestLocationUpdates` lease — this simulates LightOS not polling GPS when nothing has asked for updates recently.
+
 ### Talking to LightOS
 
 `callRemoteServiceMethod(method, payload)` sends a typed request to the LightOS server (or to `:sdk:emulator` in dev) and returns a `LightResult<Response>`. The set of available methods lives in `:sdk:shared`'s `LightServiceMethod`. Example:
