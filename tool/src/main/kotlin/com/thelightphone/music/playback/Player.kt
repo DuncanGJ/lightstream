@@ -208,7 +208,7 @@ class Player(
 
     private suspend fun pushWindow(tracks: List<Track>) {
         if (tracks.isEmpty()) return
-        controller.play(tracks.map { PlayableTrack(resolve(it), it.title, it.artist, it.album, it.durationMs()) })
+        controller.play(tracks.map { PlayableTrack(it.id, resolve(it), it.title, it.artist, it.album, it.durationMs()) })
         windowIndex = 0
         windowSize = tracks.size
         windowStale = false

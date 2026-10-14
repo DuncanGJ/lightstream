@@ -157,18 +157,27 @@ Home is the single readiness gate ("is there a Session yet?"); no other screen n
 
 ### Rolling cache
 A bounded, self-evicting on-device store of transcoded audio — recently-played plus
-prefetched-ahead — mirroring the [[Queue]]'s sliding window. Populated by *stream-and-save*
-during playback (free — those bytes were streamed anyway, retained generously) plus a
-*rolling prefetch* of ~15 tracks ahead in the [[Source]], fetched **one at a time as the cursor
-advances** (never bursted at play-start) so it never slams a big download and stops pulling the
-moment you skip past or stop. No Wi-Fi/cellular branching in v1 — bounded depth + lazy fetch
-keep data in check. The over-cache bias lives in **retention** as much as prefetch. LRU
-eviction under a ~500 MB budget. Deeper dead-zone resilience (cache a whole album before going
-offline) is the future **pinned-download** feature — **not** this cache, which is opportunistic
-and evictable, never guaranteed. Lives in the Tool's private storage, which the SDK's audio
-service reads directly — it runs in the Tool's own process, so no file-share bridge is needed.
-A cache hit is decided when a track enters the [[Playback window]]: one that lands later still
-streams for that pass.
+prefetched-ahead — mirroring the [[Queue]]'s sliding window. Two stores, one idea:
+
+- **Stream cache** (*stream-and-save*): the SDK's own `LightMediaCache`, which the detached
+  session reads through before the network and writes every streamed byte into — free, those
+  bytes were streamed anyway. Keyed by track id (a [[Stream URL]] carries a fresh salted token on
+  every resolve, so it cannot be the key). The Tool cannot look inside it or pin anything; it is
+  the session's, LRU-evicted under its own fixed budget (ADR-0003).
+- **Prefetch cache** (`TrackCache`): the Tool's own files, filled by a *rolling prefetch* of ~15
+  tracks ahead in the [[Source]], fetched **one at a time as the cursor advances** (never bursted
+  at play-start) so it never slams a big download and stops pulling the moment you skip past or
+  stop. A prefetched track enters the [[Playback window]] as a local file, which the stream cache
+  passes through untouched — the two stores never hold the same track twice.
+
+No Wi-Fi/cellular branching in v1 — bounded depth + lazy fetch keep data in check. The over-cache
+bias lives in **retention** as much as prefetch. LRU eviction, each store under its own budget.
+Deeper dead-zone resilience (cache a whole album before going offline) is the future
+**pinned-download** feature — **not** this cache, which is opportunistic and evictable, never
+guaranteed. Lives in the Tool's private storage, which the SDK's audio service reads directly —
+it runs in the Tool's own process, so no file-share bridge is needed. A prefetch hit is decided
+when a track enters the [[Playback window]]: one that lands later still streams for that pass,
+and what it streams is saved.
 
 ## Standing constraint (lifted)
 

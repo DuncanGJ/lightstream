@@ -9,6 +9,7 @@ import com.thelightphone.sdk.audio.LightAudioPlayer
 import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightAudioUsage
+import com.thelightphone.sdk.audio.LightMediaCache
 import com.thelightphone.sdk.audio.LightMediaMetadata
 import com.thelightphone.sdk.audio.LightPlayerSpec
 import com.thelightphone.sdk.audio.NO_MEDIA_ITEM
@@ -46,6 +47,7 @@ class LightAudioPlaybackController(
         LightPlayerSpec(
             usage = LightAudioUsage.Music,
             playback = LightAudioPlayback.Detached,
+            cache = LightMediaCache(STREAM_CACHE_NAME, STREAM_CACHE_BYTES),
         ),
     )
 
@@ -222,7 +224,12 @@ private fun LightAudioError.toPlaybackError() = PlaybackError(
 private fun atEndOfWindow(index: Int, windowSize: Int, positionMs: Long, durationMs: Long): Boolean =
     index == windowSize - 1 && durationMs > 0 && positionMs >= durationMs - END_OF_ITEM_TOLERANCE_MS
 
-private fun PlayableTrack.toLightAudioItem(): LightAudioItem = LightAudioItem(
+/**
+ * The SDK files cached bytes and attributes errors under [LightAudioItem.id]; a Stream URL is
+ * re-salted on every resolve, so the library's track id is the only stable key there is.
+ */
+internal fun PlayableTrack.toLightAudioItem(): LightAudioItem = LightAudioItem(
+    id = id,
     source = when (val source = source) {
         is AudioSource.Remote -> LightAudioSource.UrlSource(source.url)
         is AudioSource.Local -> LightAudioSource.FileSource(File(source.path))
@@ -237,3 +244,12 @@ private fun PlayableTrack.toLightAudioItem(): LightAudioItem = LightAudioItem(
 
 /** How close to its duration a parked item counts as finished, absorbing decoder rounding. */
 private const val END_OF_ITEM_TOLERANCE_MS = 500L
+
+/**
+ * The stream-and-save half of the Rolling cache (CONTEXT.md): the session reads through this
+ * store before the network and keeps what it streamed, keyed by track id. Local files bypass it,
+ * so prefetched tracks are never stored twice. The SDK pins a name to the first size it sees in
+ * the process and throws on any other, so this is a constant, not a Settings-tunable budget.
+ */
+internal const val STREAM_CACHE_NAME = "stream"
+internal const val STREAM_CACHE_BYTES: Long = 256L * 1024 * 1024

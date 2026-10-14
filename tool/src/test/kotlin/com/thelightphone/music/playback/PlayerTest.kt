@@ -166,6 +166,20 @@ class PlayerTest {
     }
 
     @Test
+    fun `a window entry is identified by its track id, not its salted stream URL`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("window pushed") { f.controller.windows.isNotEmpty() }
+
+        assertEquals(
+            listOf("a1", "a2"),
+            f.controller.windows.last().map { it.id },
+            "the session caches streamed bytes under this id; the URL changes on every resolve",
+        )
+        f.player.release()
+    }
+
+    @Test
     fun `an uncached track streams via its self-authenticating URL`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)

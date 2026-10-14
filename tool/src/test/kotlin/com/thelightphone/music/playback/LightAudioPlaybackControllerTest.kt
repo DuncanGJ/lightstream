@@ -3,6 +3,7 @@ package com.thelightphone.music.playback
 import com.thelightphone.sdk.audio.LightAudioError
 import com.thelightphone.sdk.audio.LightAudioErrorKind
 import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
+import com.thelightphone.sdk.audio.LightAudioSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -146,6 +147,25 @@ class LightAudioPlaybackControllerTest {
 
         assertEquals(PlaybackStatus.ERROR, state.status, "idle would invite a play() that can never be honoured")
         assertEquals(PlaybackErrorKind.UNAVAILABLE, state.error?.kind)
+    }
+
+    @Test
+    fun `a window entry reaches the SDK under its track id so streamed bytes are cached by track`() {
+        val url = "https://s.test/rest/stream?id=track-7&s=salt1&t=tok1"
+        val entry = PlayableTrack(
+            id = "track-7",
+            source = AudioSource.Remote(url),
+            title = "Nightswimming",
+            artist = "R.E.M.",
+            album = "Automatic",
+            durationMs = 258_000,
+        )
+
+        val item = entry.toLightAudioItem()
+
+        assertEquals("track-7", item.id, "keyed on the URL, every salted resolve would miss the cache")
+        assertEquals(LightAudioSource.UrlSource(url), item.source)
+        assertEquals("Nightswimming", item.metadata.title)
     }
 
     @Test

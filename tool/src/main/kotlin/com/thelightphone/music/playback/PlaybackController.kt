@@ -36,8 +36,13 @@ data class PlaybackState(
 /**
  * One entry of the window handed to the player: the bytes to play plus what the platform's
  * now-playing surfaces (lock screen, Bluetooth, LightOS) display while it plays.
+ *
+ * [id] is the library's track id — stable across resolves, unlike a [AudioSource.Remote] Stream
+ * URL, which carries a fresh salted token every time. The implementation keys anything it keeps
+ * about the entry (cached bytes, error attribution) on it.
  */
 data class PlayableTrack(
+    val id: String,
     val source: AudioSource,
     val title: String,
     val artist: String?,

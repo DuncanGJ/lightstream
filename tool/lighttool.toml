@@ -8,5 +8,6 @@ permissions = ["android.permission.INTERNET"]
 # tool screen is gone. The plugin turns this into the foreground-service permissions,
 # the capability marker, and the <service> declaration (docs/design_decisions/detached_audio.md).
 capabilities = ["detached-audio"]
-# "com.lightos" = real LP3 hardware; use "com.thelightphone.sdk.emulator" for emulator dev
+# "com.lightos" = real LP3 hardware. For the LightOS emulator use "com.thelightphone.sdk.emulator"
+# and build with -DlightSdk.allowAltServerPackage=true (the plugin fails other values otherwise).
 serverPackage = "com.lightos"

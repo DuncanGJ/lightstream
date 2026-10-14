@@ -80,6 +80,32 @@ derived on the tool's side so the seam stays small and the Player stays the one 
 - **Scrubbing** uses the SDK UI's `LightTouchableProgressBar`; a drag maps the fraction onto the
   resolved duration and lands on zero while the duration is still unknown.
 
+## Stream cache and stable ids (added with light-sdk #127)
+
+The SDK player now takes a `LightPlayerSpec`, which can name a `LightMediaCache`: a media3
+`CacheDataSource` the session reads through before the network and writes streamed bytes into,
+LRU-evicted under a size the tool fixes. That is the *stream-and-save* half of the Rolling cache
+(CONTEXT.md), which until now the tool only claimed — `TrackCache` prefetched, and a track that
+streamed saved nothing. The adapter asks for `LightMediaCache("stream", 256 MB)` on every player.
+
+- **Entries are keyed by track id.** A Stream URL carries a fresh salted token on every resolve,
+  so keyed on location nothing would ever hit. `PlayableTrack` gained `id` (the seam now names
+  what it plays, not just where) and the adapter passes it as `LightAudioItem.id`, which the SDK
+  also uses to attribute errors (`LightAudioError.itemId`).
+- **The two stores do not overlap.** Files bypass the SDK cache, so a prefetched track — handed
+  over as `AudioSource.Local` — is never copied into it. A track the stream cache already holds is
+  invisible to `TrackCache`, which may still prefetch it; that costs one download, not correctness.
+- **The size is a constant, not a setting.** The SDK pins a cache name to the first size it sees
+  in the process and throws on any other; a Settings-tunable size would break the first Session
+  rebuild after a change. `TrackCache`'s budget stays tunable.
+- **The tool cannot see inside it.** No lookup, no pin, no usage readout: it is the session's
+  cache, opportunistic by definition. The Settings cache readout reports `TrackCache` only.
+
+Not adopted yet: in-place queue edits (`addMediaItem`, `removeMediaItem`, `moveMediaItem`,
+`replaceMediaItem`, `seekToDefaultPosition`), which would lift the "edits land at track
+boundaries" consequence above and let a finished prefetch replace a window entry's source. That
+is a seam change and gets its own ADR.
+
 ## Known gaps
 
 - An external "previous" (headset, Bluetooth) re-syncs the cursor rather than walking the tool's
