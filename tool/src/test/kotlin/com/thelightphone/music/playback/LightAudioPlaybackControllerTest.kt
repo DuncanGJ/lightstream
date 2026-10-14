@@ -147,4 +147,21 @@ class LightAudioPlaybackControllerTest {
         assertEquals(PlaybackStatus.ERROR, state.status, "idle would invite a play() that can never be honoured")
         assertEquals(PlaybackErrorKind.UNAVAILABLE, state.error?.kind)
     }
+
+    @Test
+    fun `a refused detached connection is unavailable, not stuck buffering`() {
+        val state = playbackStateOf(
+            isPlaying = false,
+            index = NO_QUEUE_ITEM,
+            positionMs = 0,
+            durationMs = 0,
+            error = null,
+            availability = LightAudioPlayerAvailability.Refused,
+            windowSize = 3,
+            awaitingStart = true, // a window was handed over, but the service never took it
+        )
+
+        assertEquals(PlaybackStatus.ERROR, state.status, "the SDK will never connect; buffering would spin forever")
+        assertEquals(PlaybackErrorKind.UNAVAILABLE, state.error?.kind)
+    }
 }

@@ -10,6 +10,7 @@ import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightAudioUsage
 import com.thelightphone.sdk.audio.LightMediaMetadata
+import com.thelightphone.sdk.audio.LightPlayerSpec
 import com.thelightphone.sdk.audio.NO_MEDIA_ITEM
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -42,8 +43,10 @@ class LightAudioPlaybackController(
 ) : PlaybackController {
 
     private val player: LightAudioPlayer = audio.newPlayer(
-        usage = LightAudioUsage.Music,
-        playback = LightAudioPlayback.Detached,
+        LightPlayerSpec(
+            usage = LightAudioUsage.Music,
+            playback = LightAudioPlayback.Detached,
+        ),
     )
 
     private val _state = MutableStateFlow(PlaybackState())
@@ -162,9 +165,10 @@ class LightAudioPlaybackController(
 /**
  * Reduce the SDK player's six state flows into the tool's one [PlaybackState].
  *
- * A released handle wins over everything: the SDK releases the player itself when the detached
- * controller fails to connect, and from then on nothing can play, so reporting IDLE would invite
- * a `play()` that is never honoured.
+ * A released or refused handle wins over everything: the SDK refuses (and then releases) the
+ * player itself when the detached controller fails to connect, and from then on nothing can play,
+ * so reporting IDLE — or BUFFERING, while a handed-over window waits forever — would invite a
+ * `play()` that is never honoured.
  * The SDK reports no explicit end-of-queue, so the end of the window is inferred: the last entry,
  * not playing, parked at its own duration. [awaitingStart] covers the gap between handing over a
  * window and the session actually producing sound, which reads as buffering.
@@ -179,11 +183,10 @@ internal fun playbackStateOf(
     windowSize: Int,
     awaitingStart: Boolean,
 ): PlaybackState {
-    if (availability == LightAudioPlayerAvailability.Released) {
-        return PlaybackState(
-            status = PlaybackStatus.ERROR,
-            error = PlaybackError(PlaybackErrorKind.UNAVAILABLE, "PLAYER_RELEASED"),
-        )
+    when (availability) {
+        LightAudioPlayerAvailability.Released -> return unavailable("PLAYER_RELEASED")
+        LightAudioPlayerAvailability.Refused -> return unavailable("PLAYER_REFUSED")
+        LightAudioPlayerAvailability.Initializing, LightAudioPlayerAvailability.Ready -> Unit
     }
     val status = when {
         error != null -> PlaybackStatus.ERROR
@@ -200,6 +203,11 @@ internal fun playbackStateOf(
         error = error?.toPlaybackError(),
     )
 }
+
+private fun unavailable(diagnostic: String) = PlaybackState(
+    status = PlaybackStatus.ERROR,
+    error = PlaybackError(PlaybackErrorKind.UNAVAILABLE, diagnostic),
+)
 
 private fun LightAudioError.toPlaybackError() = PlaybackError(
     kind = when (kind) {
