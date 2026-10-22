@@ -79,16 +79,6 @@ class Queue(
         playNext.addLast(track)
     }
 
-    /**
-     * User stop: unload the current track back to the FRONT of up-next and clear now-playing.
-     * The queue loses nothing — resuming plays the stopped song first.
-     */
-    fun stop() {
-        _current.value?.let { playNext.addFirst(it) }
-        currentFromOverlay = false
-        _current.value = null
-    }
-
     /** Natural end: the current track finished — move it to History and clear now-playing. */
     fun finish() {
         _current.value?.let { pushHistory(it) }

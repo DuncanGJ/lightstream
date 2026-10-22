@@ -18,6 +18,7 @@ import com.thelightphone.music.app.MusicApp
 import com.thelightphone.music.playback.PlaybackError
 import com.thelightphone.music.playback.PlaybackErrorKind
 import com.thelightphone.music.playback.PlaybackStatus
+import com.thelightphone.music.playback.showsPause
 import com.thelightphone.music.queue.RepeatMode
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
@@ -50,8 +51,9 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 return@MusicScaffold
             }
 
+            val stopped = playback.status == PlaybackStatus.STOPPED
             Spacer(Modifier.height(24.dp))
-            LightText(t.title, variant = LightTextVariant.Heading, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            LightText(t.title, variant = LightTextVariant.Heading, lighten = stopped, maxLines = 2, overflow = TextOverflow.Ellipsis)
             t.artist?.let { LightText(it, variant = LightTextVariant.Copy, lighten = true, modifier = Modifier.padding(top = 8.dp)) }
             t.album?.let { LightText(it, variant = LightTextVariant.Detail, lighten = true) }
 
@@ -67,7 +69,7 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 )
             }
             LightText(
-                text = "${formatTime(playback.positionMs)} / ${formatTime(duration)}",
+                text = if (stopped) "Stopped · ${formatTime(duration)}" else "${formatTime(playback.positionMs)} / ${formatTime(duration)}",
                 variant = LightTextVariant.Detail,
                 lighten = true,
                 modifier = Modifier.padding(top = 8.dp),
@@ -90,7 +92,7 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 LightIcon(LightIcons.REWIND, contentDescription = "previous", modifier = Modifier.lightClickable { player.skipPrevious() })
                 LightIcon(LightIcons.SKIP_BACKWARD_FIFTEEN, contentDescription = "back 15 seconds", modifier = Modifier.lightClickable { player.skipBack() })
                 LightIcon(
-                    icon = if (playback.status == PlaybackStatus.PLAYING) LightIcons.PAUSE else LightIcons.PLAY,
+                    icon = if (playback.status.showsPause()) LightIcons.PAUSE else LightIcons.PLAY,
                     size = 3f,
                     modifier = Modifier.lightClickable { player.togglePlayPause() },
                 )
@@ -114,7 +116,7 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 )
                 LightIcon(
                     icon = LightIcons.STOP,
-                    contentDescription = "stop (queue is kept)",
+                    contentDescription = "stop (parks the track at the start)",
                     modifier = Modifier.lightClickable { player.stop() },
                 )
             }

@@ -6,6 +6,8 @@ import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * The SDK player reports its state as five independent flows; the tool's UI renders one
@@ -24,7 +26,8 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Ready,
             windowSize = 0,
-            awaitingStart = false,
+            intent = TransportIntent.PLAY,
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.IDLE, state.status)
@@ -40,7 +43,8 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
-            awaitingStart = false,
+            intent = TransportIntent.PLAY,
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.PLAYING, state.status)
@@ -58,7 +62,8 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
-            awaitingStart = true,
+            intent = TransportIntent.PLAY,
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.BUFFERING, state.status)
@@ -74,7 +79,8 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
-            awaitingStart = false,
+            intent = TransportIntent.PLAY,
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.ENDED, state.status, "the SDK reports no end-of-queue of its own")
@@ -90,7 +96,8 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
-            awaitingStart = false,
+            intent = TransportIntent.PAUSE,
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.PAUSED, state.status, "the session still has entries to play")
@@ -106,7 +113,8 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
-            awaitingStart = false,
+            intent = TransportIntent.PAUSE,
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.PAUSED, state.status)
@@ -122,7 +130,8 @@ class LightAudioPlaybackControllerTest {
             error = LightAudioError(LightAudioErrorKind.Source, "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED", itemIndex = 1),
             availability = LightAudioPlayerAvailability.Ready,
             windowSize = 3,
-            awaitingStart = true, // the handover never produced sound — the error wins over buffering
+            intent = TransportIntent.PLAY, // the handover never produced sound — the error wins over buffering
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.ERROR, state.status)
@@ -142,7 +151,8 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Released,
             windowSize = 0,
-            awaitingStart = false,
+            intent = TransportIntent.PLAY,
+            stalled = false,
         )
 
         assertEquals(PlaybackStatus.ERROR, state.status, "idle would invite a play() that can never be honoured")
@@ -178,10 +188,79 @@ class LightAudioPlaybackControllerTest {
             error = null,
             availability = LightAudioPlayerAvailability.Refused,
             windowSize = 3,
-            awaitingStart = true, // a window was handed over, but the service never took it
+            intent = TransportIntent.PLAY,
+            stalled = false, // a window was handed over, but the service never took it
         )
 
         assertEquals(PlaybackStatus.ERROR, state.status, "the SDK will never connect; buffering would spin forever")
         assertEquals(PlaybackErrorKind.UNAVAILABLE, state.error?.kind)
+    }
+
+    @Test
+    fun `a not-playing gap inside a live window while intending to play is buffering`() {
+        // media3 drops out of READY at every track boundary; that is not a pause.
+        val state = playbackStateOf(
+            isPlaying = false, index = 1, positionMs = 0, durationMs = 0, error = null,
+            availability = LightAudioPlayerAvailability.Ready, windowSize = 3,
+            intent = TransportIntent.PLAY, stalled = false,
+        )
+
+        assertEquals(PlaybackStatus.BUFFERING, state.status)
+    }
+
+    @Test
+    fun `after a pause the same gap is paused`() {
+        val state = playbackStateOf(
+            isPlaying = false, index = 1, positionMs = 42_000, durationMs = 180_000, error = null,
+            availability = LightAudioPlayerAvailability.Ready, windowSize = 3,
+            intent = TransportIntent.PAUSE, stalled = false,
+        )
+
+        assertEquals(PlaybackStatus.PAUSED, state.status)
+    }
+
+    @Test
+    fun `a stall past the grace period while intending to play reads as paused`() {
+        // An external pause (car, headset) is invisible to the tool except as a stall.
+        val state = playbackStateOf(
+            isPlaying = false, index = 1, positionMs = 42_000, durationMs = 180_000, error = null,
+            availability = LightAudioPlayerAvailability.Ready, windowSize = 3,
+            intent = TransportIntent.PLAY, stalled = true,
+        )
+
+        assertEquals(PlaybackStatus.PAUSED, state.status)
+    }
+
+    @Test
+    fun `the last entry parked at its duration still ends while intending to play`() {
+        val state = playbackStateOf(
+            isPlaying = false, index = 2, positionMs = 180_000, durationMs = 180_000, error = null,
+            availability = LightAudioPlayerAvailability.Ready, windowSize = 3,
+            intent = TransportIntent.PLAY, stalled = false,
+        )
+
+        assertEquals(PlaybackStatus.ENDED, state.status, "the queue must still finish")
+    }
+
+    @Test
+    fun `the play-pause control shows pause whenever playback is meant to continue`() {
+        assertTrue(PlaybackStatus.PLAYING.showsPause())
+        assertTrue(PlaybackStatus.BUFFERING.showsPause())
+        assertFalse(PlaybackStatus.PAUSED.showsPause())
+        assertFalse(PlaybackStatus.IDLE.showsPause())
+        assertFalse(PlaybackStatus.ENDED.showsPause())
+        assertFalse(PlaybackStatus.ERROR.showsPause())
+        assertFalse(PlaybackStatus.STOPPED.showsPause())
+    }
+
+    @Test
+    fun `stop keeps the window loaded and reads as stopped, not idle`() {
+        val state = playbackStateOf(
+            isPlaying = false, index = 1, positionMs = 0, durationMs = 180_000, error = null,
+            availability = LightAudioPlayerAvailability.Ready, windowSize = 3,
+            intent = TransportIntent.STOP, stalled = false,
+        )
+
+        assertEquals(PlaybackStatus.STOPPED, state.status, "the track is still current, just parked")
     }
 }

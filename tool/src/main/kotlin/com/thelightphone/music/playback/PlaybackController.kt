@@ -8,7 +8,25 @@ sealed interface AudioSource {
     data class Local(val path: String) : AudioSource
 }
 
-enum class PlaybackStatus { IDLE, BUFFERING, PLAYING, PAUSED, ENDED, ERROR }
+/**
+ * [STOPPED] is the user's Stop: the current track is still current and the window still loaded,
+ * but playback is parked at 0:00 with the speaker released (stop-button-ux #01). [IDLE] means
+ * nothing is loaded at all.
+ */
+enum class PlaybackStatus { IDLE, BUFFERING, PLAYING, PAUSED, STOPPED, ENDED, ERROR }
+
+/**
+ * Whether the play/pause control shows ⏸: true whenever playback is *meant* to continue, so the
+ * buffering gap at every track boundary never flashes ▶ (play-pause-flash #01).
+ */
+fun PlaybackStatus.showsPause(): Boolean = this == PlaybackStatus.PLAYING || this == PlaybackStatus.BUFFERING
+
+/**
+ * The last transport command the session was given, by the tool or observed from outside it.
+ * The SDK reports whether audio is advancing, not whether it is meant to be, so the adapter keeps
+ * this to tell a buffering gap from a pause.
+ */
+enum class TransportIntent { PLAY, PAUSE, STOP }
 
 /** Why playback stopped, at the granularity the UI can phrase and the user can act on. */
 enum class PlaybackErrorKind {
@@ -73,7 +91,12 @@ interface PlaybackController {
     fun play(window: List<PlayableTrack>)
     fun pause()
     fun resume()
+
+    /** Park the current entry at its start and release the speaker; the window stays loaded. */
     fun stop()
+
+    /** Unload everything: the session holds no queue afterwards (end of queue, teardown). */
+    fun clear()
 
     /** Move within the current entry. Clamped to the entry by the implementation. */
     fun seekTo(positionMs: Int)

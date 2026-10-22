@@ -157,23 +157,6 @@ class QueueTest {
     }
 
     @Test
-    fun `stop unloads the current track to the front of up-next`() = runBlocking {
-        val queue = Queue()
-        val albumA = ListSource("Album A", listOf(track("a1"), track("a2")))
-        queue.start(albumA, 0)
-        queue.addPlayNext(track("x"))
-
-        queue.stop()
-
-        assertEquals(null, queue.current.value, "nothing is playing after stop")
-        assertEquals(
-            listOf("a1", "x", "a2"),
-            queue.upcomingItems(5).map { it.track.id },
-            "the stopped song returns to the front — the queue loses nothing",
-        )
-    }
-
-    @Test
     fun `finish moves the current track to history and clears current`() = runBlocking {
         val queue = Queue()
         val albumA = ListSource("Album A", listOf(track("a1"), track("a2")))

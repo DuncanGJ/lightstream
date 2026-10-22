@@ -21,7 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.thelightphone.music.app.MusicApp
 import com.thelightphone.music.model.Track
-import com.thelightphone.music.playback.PlaybackStatus
+import com.thelightphone.music.playback.showsPause
 import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightBottomBar
@@ -86,11 +86,10 @@ private fun NowPlayingBar(onOpen: () -> Unit) {
     val track by p.current.collectAsState()
     val t = track ?: return
     val playback by p.state.collectAsState()
-    val playing = playback.status == PlaybackStatus.PLAYING
     LightBottomBar(
         items = listOf(
             LightBarButton.LightIcon(
-                icon = if (playing) LightIcons.PAUSE else LightIcons.PLAY,
+                icon = if (playback.status.showsPause()) LightIcons.PAUSE else LightIcons.PLAY,
                 onClick = { p.togglePlayPause() },
             ),
             LightBarButton.Text(text = t.title, onClick = onOpen),

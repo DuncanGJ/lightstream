@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -58,9 +59,21 @@ class LightAudioPlaybackController(
     override var onWindowEnd: (() -> Unit)? = null
 
     private var windowSize = 0
-    private var awaitingStart = false
     private var lastIndex = NO_QUEUE_ITEM
     private var endReported = false
+
+    /** What playback is meant to be doing; see [TransportIntent]. */
+    private var intent = TransportIntent.PAUSE
+
+    /**
+     * Not-playing while meant to play is a buffering gap — unless it lasts longer than
+     * [STALL_GRACE_MS], which is how an external pause (car, headset) shows up, since the SDK
+     * exposes no play-when-ready. After the grace the state flips to PAUSED; a resume clears it.
+     */
+    private var stalled = false
+    private var stallJob: Job? = null
+    private var lastSnapshot: Snapshot? = null
+    private var lastAvailability = LightAudioPlayerAvailability.Initializing
 
     /** One snapshot of the SDK player's independently-emitted state. */
     private data class Snapshot(
@@ -82,23 +95,53 @@ class LightAudioPlaybackController(
             Snapshot(isPlaying, index, positionMs, durationMs, error)
         }
         combine(snapshots, player.availability, ::Pair).collect { (snapshot, availability) ->
-            if (snapshot.isPlaying) awaitingStart = false
-            _state.value = playbackStateOf(
-                isPlaying = snapshot.isPlaying,
-                index = snapshot.index,
-                positionMs = snapshot.positionMs,
-                durationMs = snapshot.durationMs,
-                error = snapshot.error,
-                availability = availability,
-                windowSize = windowSize,
-                awaitingStart = awaitingStart,
-            )
+            lastSnapshot = snapshot
+            lastAvailability = availability
+            if (snapshot.isPlaying) {
+                // Observed playback is play intent, whoever asked for it (car, headset, LightOS).
+                intent = TransportIntent.PLAY
+                clearStall()
+            } else if (intent == TransportIntent.PLAY && stallJob == null) {
+                stallJob = scope.launch {
+                    delay(STALL_GRACE_MS)
+                    stalled = true
+                    reduce()
+                }
+            }
+            reduce()
             followIndex(snapshot.index)
             if (_state.value.status == PlaybackStatus.ENDED && !endReported) {
                 endReported = true
                 onWindowEnd?.invoke()
             }
         }
+    }
+
+    private fun reduce() {
+        val snapshot = lastSnapshot ?: return
+        _state.value = playbackStateOf(
+            isPlaying = snapshot.isPlaying,
+            index = snapshot.index,
+            positionMs = snapshot.positionMs,
+            durationMs = snapshot.durationMs,
+            error = snapshot.error,
+            availability = lastAvailability,
+            windowSize = windowSize,
+            intent = intent,
+            stalled = stalled,
+        )
+    }
+
+    private fun clearStall() {
+        stallJob?.cancel()
+        stallJob = null
+        stalled = false
+    }
+
+    private fun setIntent(value: TransportIntent) {
+        intent = value
+        clearStall()
+        reduce()
     }
 
     /**
@@ -115,9 +158,9 @@ class LightAudioPlaybackController(
 
     override fun play(window: List<PlayableTrack>) {
         windowSize = window.size
-        awaitingStart = true
         endReported = false
         lastIndex = 0
+        setIntent(TransportIntent.PLAY)
         scope.launch {
             if (!player.awaitReady()) return@launch
             player.setMediaQueue(window.map(PlayableTrack::toLightAudioItem), startIndex = 0)
@@ -125,15 +168,28 @@ class LightAudioPlaybackController(
         }
     }
 
-    override fun pause() = ifLive { it.pause() }
+    override fun pause() {
+        setIntent(TransportIntent.PAUSE)
+        ifLive { it.pause() }
+    }
 
-    override fun resume() = ifLive { it.play() }
+    override fun resume() {
+        setIntent(TransportIntent.PLAY)
+        ifLive { it.play() }
+    }
 
     override fun seekTo(positionMs: Int) = ifLive { it.seekTo(positionMs.toLong()) }
 
+    /** The SDK's stop keeps the queue, seeks to zero and drops audio focus — exactly the parked state. */
     override fun stop() {
+        setIntent(TransportIntent.STOP)
+        ifLive { it.stop() }
+    }
+
+    override fun clear() {
         windowSize = 0
         lastIndex = NO_QUEUE_ITEM
+        setIntent(TransportIntent.PAUSE)
         ifLive {
             it.stop()
             it.setMediaQueue(emptyList())
@@ -155,7 +211,8 @@ class LightAudioPlaybackController(
      * down (a credentials change), and that music belongs to the server we just left.
      */
     override fun release() {
-        stop()
+        clear()
+        clearStall()
         mirror.cancel()
         player.release()
     }
@@ -169,8 +226,10 @@ class LightAudioPlaybackController(
  * so reporting IDLE — or BUFFERING, while a handed-over window waits forever — would invite a
  * `play()` that is never honoured.
  * The SDK reports no explicit end-of-queue, so the end of the window is inferred: the last entry,
- * not playing, parked at its own duration. [awaitingStart] covers the gap between handing over a
- * window and the session actually producing sound, which reads as buffering.
+ * not playing, parked at its own duration — and that wins over buffering so the queue finishes.
+ * Otherwise not-playing while [intent] is PLAY is BUFFERING (the handover gap, every track
+ * boundary, a network stall) until it has [stalled] past the grace, which is the only way an
+ * external pause shows up.
  */
 internal fun playbackStateOf(
     isPlaying: Boolean,
@@ -180,7 +239,8 @@ internal fun playbackStateOf(
     error: LightAudioError?,
     availability: LightAudioPlayerAvailability,
     windowSize: Int,
-    awaitingStart: Boolean,
+    intent: TransportIntent,
+    stalled: Boolean,
 ): PlaybackState {
     when (availability) {
         LightAudioPlayerAvailability.Released -> return unavailable("PLAYER_RELEASED")
@@ -191,8 +251,9 @@ internal fun playbackStateOf(
         error != null -> PlaybackStatus.ERROR
         index == NO_QUEUE_ITEM -> PlaybackStatus.IDLE
         isPlaying -> PlaybackStatus.PLAYING
-        awaitingStart -> PlaybackStatus.BUFFERING
         atEndOfWindow(index, windowSize, positionMs, durationMs) -> PlaybackStatus.ENDED
+        intent == TransportIntent.STOP -> PlaybackStatus.STOPPED
+        intent == TransportIntent.PLAY && !stalled -> PlaybackStatus.BUFFERING
         else -> PlaybackStatus.PAUSED
     }
     return PlaybackState(
@@ -241,6 +302,9 @@ internal fun PlayableTrack.toLightAudioItem(): LightAudioItem = LightAudioItem(
 
 /** How close to its duration a parked item counts as finished, absorbing decoder rounding. */
 private const val END_OF_ITEM_TOLERANCE_MS = 500L
+
+/** How long not-playing-while-meant-to-play reads as buffering before it is taken for an external pause. */
+internal const val STALL_GRACE_MS = 3_000L
 
 /**
  * The stream-and-save half of the Rolling cache (CONTEXT.md): the session reads through this

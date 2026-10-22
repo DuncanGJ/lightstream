@@ -75,8 +75,8 @@ class Player(
      */
     fun togglePlayPause() {
         when (state.value.status) {
-            PlaybackStatus.PLAYING -> controller.pause()
-            PlaybackStatus.PAUSED -> controller.resume()
+            PlaybackStatus.PLAYING, PlaybackStatus.BUFFERING -> controller.pause()
+            PlaybackStatus.PAUSED, PlaybackStatus.STOPPED -> controller.resume()
             PlaybackStatus.ERROR -> if (queue.current.value != null) scope.launch { pushWindow() }
             else -> Unit
         }
@@ -141,20 +141,19 @@ class Player(
     /** The queue ran out: the last song completed, so it belongs in History, not back in the queue. */
     private suspend fun finishQueue() {
         queue.finish()
-        controller.stop()
+        controller.clear()
         windowSize = 0
         refreshUpcoming()
     }
 
-    /** User stop: playback and the now-playing bar go away; the queue is fully retained. */
+    /**
+     * User stop: the track parks at 0:00 and the speaker is released, but it stays *current* — the
+     * now-playing surfaces keep showing it (grayed) and play restarts it from the top. The queue
+     * and the loaded window are untouched; only the prefetch pauses, since nothing is advancing.
+     */
     fun stop() {
         prefetchJob?.cancel()
-        scope.launch {
-            queue.stop()
-            controller.stop()
-            windowSize = 0
-            refreshUpcoming()
-        }
+        controller.stop()
     }
 
     /** Start the front of the queue when nothing is playing (the queue page's play button). */

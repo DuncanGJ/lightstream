@@ -68,8 +68,10 @@ private class FakePlaybackController : PlaybackController {
         _state.value = PlaybackState(PlaybackStatus.PLAYING, positionMs = 0, durationMs = 100_000)
     }
     override fun pause() { _state.value = _state.value.copy(status = PlaybackStatus.PAUSED) }
-    override fun resume() { _state.value = _state.value.copy(status = PlaybackStatus.PLAYING) }
-    override fun stop() { stopped = true; _state.value = PlaybackState() }
+    override fun resume() { stopped = false; _state.value = _state.value.copy(status = PlaybackStatus.PLAYING) }
+    override fun stop() { stopped = true; _state.value = _state.value.copy(status = PlaybackStatus.STOPPED, positionMs = 0) }
+    override fun clear() { cleared = true; stopped = false; _state.value = PlaybackState() }
+    var cleared = false
     override fun seekTo(positionMs: Int) {
         seeks.add(positionMs)
         _state.value = _state.value.copy(positionMs = positionMs.coerceIn(0, _state.value.durationMs))
@@ -80,6 +82,9 @@ private class FakePlaybackController : PlaybackController {
     val seeks = mutableListOf<Int>()
 
     fun setPosition(ms: Int) { _state.value = _state.value.copy(positionMs = ms) }
+
+    /** media3 left READY mid-window (track boundary, network stall) while still meant to play. */
+    fun buffer() { _state.value = _state.value.copy(status = PlaybackStatus.BUFFERING) }
 
     /** The current entry failed: like the SDK, the player stops rather than advancing. */
     fun fail(kind: PlaybackErrorKind) {
@@ -268,17 +273,24 @@ class PlayerTest {
     }
 
     @Test
-    fun `stop kills playback but retains the queue with the stopped song at front`() = runBlocking {
+    fun `stop parks the current track at the start and keeps it current`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
         awaitUntil("first play") { f.controller.windows.isNotEmpty() }
         f.player.addToQueue(track("x"))
+        awaitUntil("queued") { f.player.upcomingIds() == listOf("x", "a2") }
 
         f.player.stop()
-        awaitUntil("stopped") { f.controller.stopped }
+        awaitUntil("stopped") { f.player.state.value.status == PlaybackStatus.STOPPED }
 
-        assertEquals(null, f.player.current.value, "now-playing must clear so the bar hides")
-        awaitUntil("queue retained") { f.player.upcomingIds() == listOf("a1", "x", "a2") }
+        assertEquals("a1", f.player.current.value?.id, "the stopped track stays on the now-playing surfaces")
+        assertEquals(listOf("x", "a2"), f.player.upcomingIds(), "nothing moves in the queue")
+        assertEquals(0, f.player.state.value.positionMs)
+
+        f.player.togglePlayPause()
+        awaitUntil("resumed") { f.player.state.value.status == PlaybackStatus.PLAYING }
+        assertEquals(1, f.controller.windows.size, "resume plays the loaded window from the top of a1, no re-push")
+        assertEquals("a1", f.controller.nowPlayingId())
         f.player.release()
     }
 
@@ -318,7 +330,7 @@ class PlayerTest {
         f.player.playFrom(ListSource("A", listOf(track("a1"))), 0)
         awaitUntil("first play") { f.controller.windows.isNotEmpty() }
         f.controller.completeCurrent()
-        awaitUntil("stop at end") { f.controller.stopped }
+        awaitUntil("unloaded at end") { f.controller.cleared }
 
         f.player.addToQueue(track("x"))
         delay(100)
@@ -385,7 +397,7 @@ class PlayerTest {
         awaitUntil("first play") { f.controller.windows.isNotEmpty() }
 
         f.controller.completeCurrent()
-        awaitUntil("stop") { f.controller.stopped }
+        awaitUntil("unloaded") { f.controller.cleared }
 
         assertEquals(1, f.controller.windows.size, "nothing further must play")
         assertEquals(null, f.player.current.value, "a finished queue leaves now-playing")
@@ -527,6 +539,19 @@ class PlayerTest {
         delay(100)
 
         assertEquals("a1", f.player.current.value?.id, "a1 was in history once; a second previous restarts it, not an older copy")
+        f.player.release()
+    }
+
+    @Test
+    fun `the play-pause button pauses even while buffering`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+        f.controller.buffer()
+
+        f.player.togglePlayPause()
+
+        awaitUntil("paused") { f.player.state.value.status == PlaybackStatus.PAUSED }
         f.player.release()
     }
 }
