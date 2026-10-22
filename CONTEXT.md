@@ -56,7 +56,10 @@ Server is the durable core of the project. The Media Server that yields it most 
 openly is a primary selection criterion.
 
 ### Playback API (shipped: detached audio)
-Light's sanctioned audio surface, **shipped** in the **tool-owned** shape (light-sdk #148): the
+Light's sanctioned audio surface, **shipped** in the **tool-owned** shape (light-sdk #148) and,
+as of October 2026, **live in released LightOS** — car/Bluetooth transport and the LightOS
+now-playing surface drive the Tool's session directly, which is why the Tool must *follow* every
+external transport step, backward as well as forward (`.scratch/external-transport-follow/`). The
 Tool decodes audio itself, in a `MediaSessionService` the SDK owns and the Gradle plugin declares
 in the Tool's manifest. The Tool opts in with `capabilities = ["detached-audio"]` and asks for a
 `LightAudioPlayer` in `Detached` mode. The rejected alternative — a centralized "internal
