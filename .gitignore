@@ -1,3 +1,5 @@
+docs/
+.scratch/
 .gradle
 build/
 !gradle/wrapper/gradle-wrapper.jar
