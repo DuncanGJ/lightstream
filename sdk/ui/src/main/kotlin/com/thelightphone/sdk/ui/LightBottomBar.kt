@@ -82,9 +82,17 @@ fun LightBottomBar(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        items.forEach { item ->
-                            LightBottomBarItemView(item)
+                        LightBottomBarItemView(items[0])
+                        // The text takes only what is left after both icons are laid out at their
+                        // natural size, so a long label ellipsizes instead of pushing the trailing
+                        // icon off the bar; fill = false keeps short labels centered as before.
+                        Box(
+                            modifier = Modifier.weight(1f, fill = false),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            LightBottomBarItemView(items[1])
                         }
+                        LightBottomBarItemView(items[2])
                     }
                 } else {
                     LightBottomBarSlot(align = Alignment.CenterStart) {
@@ -167,6 +175,23 @@ private fun PreviewLightBottomBarIconsDark() {
                 ),
             )
         }
+    }
+}
+
+@Preview(widthDp = 1080 / 3, heightDp = 1240 / 3, showBackground = true)
+@Composable
+private fun PreviewLightBottomBarMixedLongLabel() {
+    LightTheme(colors = LightThemeColors.Light) {
+        LightBottomBar(
+            items = listOf(
+                LightBarButton.LightIcon(icon = LightIcons.PAUSE, onClick = {}),
+                LightBarButton.Text(
+                    text = "A VERY LONG TRACK TITLE THAT MUST ELLIPSIZE AND LEAVE THE TRAILING ICON ALONE",
+                    onClick = {},
+                ),
+                LightBarButton.LightIcon(icon = LightIcons.FAST_FORWARD, onClick = {}),
+            ),
+        )
     }
 }
 
