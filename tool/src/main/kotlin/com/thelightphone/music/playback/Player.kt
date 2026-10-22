@@ -164,10 +164,16 @@ class Player(
     }
 
     /**
-     * Always steps back through History — no restart-after-3s rule. The queue is a temporary
-     * playlist: navigation must never lose your place or drop songs (only ✕ removes).
+     * iPod-style previous: deep into a track it restarts the track (a seek — nothing is re-pushed,
+     * History and the queue are untouched); pressed again within [RESTART_THRESHOLD_MS] of the
+     * start it steps back through History. The queue is a temporary playlist: navigation never
+     * loses your place or drops songs (only ✕ removes).
      */
     fun skipPrevious() {
+        if (previousRestarts(state.value.positionMs)) {
+            seekTo(0)
+            return
+        }
         scope.launch {
             queue.previous()
             pushWindow()
@@ -258,8 +264,14 @@ class Player(
 
         /** How far the skip-back / skip-forward buttons move, matching the SDK player's own nudge. */
         const val NUDGE_MS = 15_000
+
+        /** Previous restarts the track at or past this position; before it, it steps back. */
+        const val RESTART_THRESHOLD_MS = 1_500
     }
 }
+
+/** The previous button's rule, on playback position (so Previous right after a seek to 0:00 steps back). */
+internal fun previousRestarts(positionMs: Int): Boolean = positionMs >= Player.RESTART_THRESHOLD_MS
 
 /** Where a nudge lands: clamped to the track, and to zero while the duration is still unknown. */
 internal fun nudgedPosition(positionMs: Int, durationMs: Int, deltaMs: Int): Int =

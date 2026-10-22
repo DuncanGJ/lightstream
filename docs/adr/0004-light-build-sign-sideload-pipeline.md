@@ -5,7 +5,7 @@ The Light SDK now ships the whole path from a tool repo to a tool on a phone: a 
 APK plus a `recipe.json`; a **signer** (`signer/`) that writes a trust statement into the APK and
 signs it with a per-tool key and Light's source stamp; a device-side **install policy**
 (`sdk/trust/`) that decides whether an APK may be installed; and the **Tool Manager** sideloading
-route for developers (`docs/sideloading/`). LightDrome adopts that pipeline as-is rather than
+route for developers (`docs/sideloading/`). LightStream adopts that pipeline as-is rather than
 carrying its own release mechanics.
 
 ## What the pipeline sees of this repo
@@ -27,8 +27,11 @@ Only three things reach Light's builder: `tool/lighttool.toml`, `tool/build.grad
 
 ## Identity, versions and signing
 
-- `id = "io.github.duncangj.lightdrome"` is the permanent identity: the signer's registry maps it to
+- `id = "io.github.duncangj.lightstream"` is the permanent identity: the signer's registry maps it to
   one APK signing key, and the install policy refuses a second key for the same id. It never changes.
+  *Amended 2026-10-22:* renamed from `…lightdrome` (label "LightDrome") while the id was still
+  unregistered, so the rename was free; on a phone the old install is a separate app and must be
+  uninstalled by hand (`rename-lightstream #01`). From here on the id is frozen.
 - `versionCode` increases on **every** published build; the trust statement and the manifest must
   agree, and the trust bundle may raise a `minVersionCode` floor that strands anything older.
   `versionName` stays strict `major.minor.patch`.
@@ -56,8 +59,8 @@ anyone else gets the tool through the signed route above.
 ## Considered and not adopted
 
 - **`tool-manager-provider` capability.** It lets a tool expose directories to the browser-based
-  Tool Manager. LightDrome moves no files in either direction — the library is streamed from the
+  Tool Manager. LightStream moves no files in either direction — the library is streamed from the
   user's Navidrome and the [[Rolling cache]] is opportunistic and private — so there is nothing to
   offer. Revisit if **pinned downloads** (CONTEXT.md) arrive and users want to seed them from a PC.
-- **A LightDrome-specific CI release job.** The upstream `pr-check.yml` already runs the plugin and
+- **A LightStream-specific CI release job.** The upstream `pr-check.yml` already runs the plugin and
   module checks; publishing is Light's job once the tool is submitted.

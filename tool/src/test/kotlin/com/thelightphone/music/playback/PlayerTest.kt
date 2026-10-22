@@ -20,6 +20,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 private fun track(id: String) = Track(
@@ -231,17 +232,36 @@ class PlayerTest {
     }
 
     @Test
-    fun `skipPrevious always steps back through history regardless of position`() = runBlocking {
+    fun `previous deep into a track restarts it without touching history or the window`() = runBlocking {
         val f = Fixture(this)
         f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
         awaitUntil("first play") { f.controller.windows.isNotEmpty() }
         f.controller.completeCurrent()
         awaitUntil("auto-advance") { f.player.current.value?.id == "a2" }
 
-        f.controller.setPosition(5_000) // deep into the song — must still go BACK, never restart
+        f.controller.setPosition(5_000) // well past the restart threshold
         f.player.skipPrevious()
-        awaitUntil("previous") { f.controller.nowPlayingId() == "a1" }
 
+        awaitUntil("restarted") { f.controller.seeks == listOf(0) }
+        assertEquals("a2", f.player.current.value?.id, "still the same track")
+        assertEquals(1, f.controller.windows.size, "a restart is a seek, never a re-push")
+        f.player.release()
+    }
+
+    @Test
+    fun `previous twice in quick succession steps back a track`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+        f.controller.completeCurrent()
+        awaitUntil("auto-advance") { f.player.current.value?.id == "a2" }
+        f.controller.setPosition(5_000)
+
+        f.player.skipPrevious() // restart → position is now 0
+        awaitUntil("restarted") { f.player.state.value.positionMs == 0 }
+        f.player.skipPrevious() // within the threshold → History
+
+        awaitUntil("previous") { f.controller.nowPlayingId() == "a1" }
         assertEquals("a1", f.player.current.value?.id)
         f.player.release()
     }
@@ -553,5 +573,13 @@ class PlayerTest {
 
         awaitUntil("paused") { f.player.state.value.status == PlaybackStatus.PAUSED }
         f.player.release()
+    }
+
+    @Test
+    fun `the restart-or-step-back rule is position based`() {
+        assertTrue(previousRestarts(positionMs = Player.RESTART_THRESHOLD_MS))
+        assertTrue(previousRestarts(positionMs = 90_000))
+        assertFalse(previousRestarts(positionMs = Player.RESTART_THRESHOLD_MS - 1))
+        assertFalse(previousRestarts(positionMs = 0))
     }
 }

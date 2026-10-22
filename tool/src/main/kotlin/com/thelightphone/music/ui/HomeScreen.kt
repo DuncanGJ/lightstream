@@ -34,7 +34,7 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : SimpleLightS
         val configured = session != null
 
         MusicScaffold(
-            title = "LightDrome",
+            title = "LightStream",
             onOpenNowPlaying = { navigateTo({ NowPlayingScreen(it) }) },
         ) {
             // The menu scrolls in the space left over — the now-playing bar never covers it.

@@ -56,16 +56,36 @@ handover of ownership.
   pass. Bytes are not wasted (the cache is populated by stream-and-save anyway), but the window
   is one more reason the prefetch depth matters.
 
-## Transport controls and failures (added with light-sdk 0.1.2)
+## Transport controls and failures (added with light-sdk 0.1.2, revised 2026-10-22)
 
 The SDK player's transport surface is wider than play/pause/next: `seekTo`, 15-second
 `skipBack`/`skipForward`, and an observed, *classified* `LightAudioError` plus a connection
-`availability`. The seam grew by exactly one method, `seekTo(positionMs)`; everything else is
-derived on the tool's side so the seam stays small and the Player stays the one owner:
+`availability`. The seam grew by `seekTo(positionMs)` and `clear()`; everything else is derived on
+the tool's side so the seam stays small and the Player stays the one owner:
 
 - **Nudges are a Player concern, not a seam one.** `Player.skipBack/skipForward` clamp 15 s against
   the position and duration the UI already shows and call `seekTo`. The SDK has its own nudges, but
   routing them through the seam would make the fake in tests encode SDK clamping rules.
+- **Previous is restart-first.** Past `RESTART_THRESHOLD_MS` (1.5 s) into a track, ◀◀ seeks to
+  0:00 — a seek, so nothing is re-pushed and History is untouched. Within the threshold it pops
+  History as before. The car / headset side already behaves this way on its own (media3's 3 s
+  `maxSeekToPreviousPosition`), so both surfaces now agree.
+- **Every external step is followed, both ways.** The seam reports each index change the session
+  makes by itself (`onIndexChanged`). Forward steps advance the Queue as natural completions;
+  backward steps — a car or LightOS "previous" — walk History back the same number of steps. Neither
+  re-points the window: the session already moved, and re-pushing would restart the track. A forward
+  jump of more than one records each skipped entry as played, which is acceptable.
+- **Intent, not instantaneous state, drives the control.** The SDK reports whether audio is
+  advancing (`isPlaying`), not whether it is meant to be, and media3 drops out of READY at every
+  track boundary. The adapter keeps a `TransportIntent` (PLAY / PAUSE / STOP; observed playback
+  sets PLAY whoever asked for it) and maps not-playing-while-PLAY to `BUFFERING`, which the control
+  renders as ⏸ (`showsPause`). An **external pause** is invisible except as a stall, so after a
+  3 s grace (`STALL_GRACE_MS`) the same gap reads as `PAUSED`. The end-of-window inference still
+  wins over buffering so the queue finishes.
+- **Stop parks; it does not unload.** `STOPPED` keeps the track current and the window loaded,
+  seeks to 0:00 and drops audio focus (the SDK's `stop`); the now-playing surfaces keep the track,
+  grayed, and play restarts it from the top. Unloading the session is `clear()`, used only when the
+  queue runs out and at Session teardown. `Queue.stop()` is gone: Stop no longer moves anything.
 - **Errors are typed, not boolean.** `PlaybackState.error` carries a `PlaybackErrorKind`
   (`SOURCE`, `UNSUPPORTED`, `OUTPUT`, `UNAVAILABLE`, `UNKNOWN`) mapped from the SDK's kinds. The UI
   phrases each as product copy that names what the on-screen buttons can do about it.
@@ -73,42 +93,16 @@ derived on the tool's side so the seam stays small and the Player stays the one 
   would loop); the tool follows suit. Play on an errored track **retries** it: the window is
   re-pushed from the current cursor, which also re-resolves the source, so a track whose download
   finished in the meantime now plays from the cache.
-- **A released handle is `UNAVAILABLE`, not idle.** The SDK releases the player itself when the
-  detached controller never connects, and throws on any later command. The reducer maps
-  `availability == Released` to an `ERROR/UNAVAILABLE` state ahead of everything else, and the
-  adapter drops commands on a released handle instead of crashing the tool.
+- **A released or refused handle is `UNAVAILABLE`, not idle.** The SDK releases the player itself
+  when the detached controller never connects, and throws on any later command. The reducer maps
+  that to an `ERROR/UNAVAILABLE` state ahead of everything else, and the adapter drops commands on a
+  released handle instead of crashing the tool.
 - **Scrubbing** uses the SDK UI's `LightTouchableProgressBar`; a drag maps the fraction onto the
   resolved duration and lands on zero while the duration is still unknown.
 
-## Stream cache and stable ids (added with light-sdk #127)
-
-The SDK player now takes a `LightPlayerSpec`, which can name a `LightMediaCache`: a media3
-`CacheDataSource` the session reads through before the network and writes streamed bytes into,
-LRU-evicted under a size the tool fixes. That is the *stream-and-save* half of the Rolling cache
-(CONTEXT.md), which until now the tool only claimed — `TrackCache` prefetched, and a track that
-streamed saved nothing. The adapter asks for `LightMediaCache("stream", 256 MB)` on every player.
-
-- **Entries are keyed by track id.** A Stream URL carries a fresh salted token on every resolve,
-  so keyed on location nothing would ever hit. `PlayableTrack` gained `id` (the seam now names
-  what it plays, not just where) and the adapter passes it as `LightAudioItem.id`, which the SDK
-  also uses to attribute errors (`LightAudioError.itemId`).
-- **The two stores do not overlap.** Files bypass the SDK cache, so a prefetched track — handed
-  over as `AudioSource.Local` — is never copied into it. A track the stream cache already holds is
-  invisible to `TrackCache`, which may still prefetch it; that costs one download, not correctness.
-- **The size is a constant, not a setting.** The SDK pins a cache name to the first size it sees
-  in the process and throws on any other; a Settings-tunable size would break the first Session
-  rebuild after a change. `TrackCache`'s budget stays tunable.
-- **The tool cannot see inside it.** No lookup, no pin, no usage readout: it is the session's
-  cache, opportunistic by definition. The Settings cache readout reports `TrackCache` only.
-
-Not adopted yet: in-place queue edits (`addMediaItem`, `removeMediaItem`, `moveMediaItem`,
-`replaceMediaItem`, `seekToDefaultPosition`), which would lift the "edits land at track
-boundaries" consequence above and let a finished prefetch replace a window entry's source. That
-is a seam change and gets its own ADR.
-
 ## Known gaps
 
-- An external "previous" (headset, Bluetooth) re-syncs the cursor rather than walking the tool's
-  History, which is the authority on what "previous" means. External *next* is followed normally.
+- An external pause is only inferred, after the stall grace; for up to 3 s the control shows ⏸
+  while the car has already paused. The SDK exposes no play-when-ready to do better.
 - Detached playback lives in the tool's process. If Android kills the process, playback and queue
   go with it; restoring a queue across process death is not implemented.

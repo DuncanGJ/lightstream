@@ -96,8 +96,12 @@ lazily as a sliding-window [[Source]].
 The tool's home base — the current track plus transport controls: previous / next, play-pause,
 15-second nudges, a drag-to-seek scrubber, repeat, stop. Shown first when the tool opens if
 something is playing. A dedicated [[Browse]] screen (not a modal), reachable from anywhere via a
-small shared bottom-bar affordance. When a track fails it says *why* (connection, format, output)
-and what the buttons can do about it; play on a failed track retries it, nothing skips on its own.
+small shared bottom-bar affordance. The play-pause control shows ⏸ whenever playback is *meant*
+to continue, including the buffering gap between tracks. **Stop** parks the current track at 0:00
+and releases the speaker but keeps it current — the surfaces show it grayed, play restarts it from
+the top; nothing moves in the [[Queue]]. When a track fails it says *why* (connection, format,
+output) and what the buttons can do about it; play on a failed track retries it, nothing skips on
+its own.
 
 ### Source
 The ordered list a play action was launched from: an album's tracks, an artist's songs, "all
@@ -122,9 +126,11 @@ completion only* — the next button always advances.
 
 ### History
 The capped stack of previously-played tracks, each stored with its full [[Queue]] context
-(source + cursor). "Previous" pops History — returning to the last track *actually played*,
-not the album neighbour — and restores that context so "next" resumes from there. History is
-what **did** play; the [[Queue]] is what **will**.
+(source + cursor). "Previous" is restart-first: past 1.5 s into a track it restarts the track;
+within that it pops History — returning to the last track *actually played*, not the album
+neighbour — and restores that context so "next" resumes from there. A previous from the car,
+headset or LightOS walks History the same way, so the phone always shows what is playing. History
+is what **did** play; the [[Queue]] is what **will**.
 
 ### Play Next
 The single manual queue operation: insert one track into the [[Queue]] overlay to play
