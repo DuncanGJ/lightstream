@@ -52,7 +52,7 @@ private class FakeCacheDao : CacheDao {
 private class FakePlaybackController : PlaybackController {
     private val _state = MutableStateFlow(PlaybackState())
     override val state: StateFlow<PlaybackState> = _state
-    override var onAdvance: ((Int) -> Unit)? = null
+    override var onIndexChanged: ((Int) -> Unit)? = null
     override var onWindowEnd: (() -> Unit)? = null
 
     /** Every window handed over — a new entry means playback was re-pointed, not just advanced. */
@@ -91,11 +91,18 @@ private class FakePlaybackController : PlaybackController {
         val window = windows.lastOrNull() ?: return
         if (index + 1 < window.size) {
             index++
-            onAdvance?.invoke(index)
+            onIndexChanged?.invoke(index)
         } else {
             _state.value = _state.value.copy(status = PlaybackStatus.ENDED)
             onWindowEnd?.invoke()
         }
+    }
+
+    /** A car / headset "previous": the session steps back inside its window by itself. */
+    fun retreat() {
+        if (index == 0) return
+        index--
+        onIndexChanged?.invoke(index)
     }
 
     /** What is coming out of the speaker right now. */
@@ -465,6 +472,61 @@ class PlayerTest {
         awaitUntil("retried") { f.controller.windows.size == 2 }
         assertEquals("a1", f.controller.nowPlayingId(), "the failed track is retried, not skipped")
         assertEquals(PlaybackStatus.PLAYING, f.player.state.value.status)
+        f.player.release()
+    }
+
+    @Test
+    fun `an external previous walks the queue back without re-pointing the window`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"), track("a3"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+        f.controller.completeCurrent()
+        awaitUntil("advanced") { f.player.current.value?.id == "a2" }
+
+        f.controller.retreat() // the car's ◀◀ — media3 already moved back to a1
+
+        awaitUntil("followed back") { f.player.current.value?.id == "a1" }
+        assertEquals(1, f.controller.windows.size, "the session already moved; re-pushing would restart a1")
+        awaitUntil("up next is a2 again") { f.player.upcomingIds().take(2) == listOf("a2", "a3") }
+        f.player.release()
+    }
+
+    @Test
+    fun `after an external previous the on-screen previous never jumps forward`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"), track("a3"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+        f.controller.completeCurrent()
+        f.controller.completeCurrent()
+        awaitUntil("on a3") { f.player.current.value?.id == "a3" }
+        f.controller.retreat()
+        awaitUntil("on a2") { f.player.current.value?.id == "a2" }
+
+        f.player.skipPrevious()
+
+        awaitUntil("history is a1") { f.controller.nowPlayingId() == "a1" }
+        assertEquals("a1", f.player.current.value?.id)
+        f.player.release()
+    }
+
+    @Test
+    fun `after an external previous a natural completion records history once`() = runBlocking {
+        val f = Fixture(this)
+        f.player.playFrom(ListSource("A", listOf(track("a1"), track("a2"))), 0)
+        awaitUntil("first play") { f.controller.windows.isNotEmpty() }
+        f.controller.completeCurrent()
+        awaitUntil("on a2") { f.player.current.value?.id == "a2" }
+        f.controller.retreat()
+        awaitUntil("back on a1") { f.player.current.value?.id == "a1" }
+
+        f.controller.completeCurrent() // a1 plays out again
+        awaitUntil("forward to a2") { f.player.current.value?.id == "a2" }
+        f.player.skipPrevious()
+        awaitUntil("back to a1") { f.player.current.value?.id == "a1" }
+        f.player.skipPrevious()
+        delay(100)
+
+        assertEquals("a1", f.player.current.value?.id, "a1 was in history once; a second previous restarts it, not an older copy")
         f.player.release()
     }
 }

@@ -33,7 +33,7 @@ const val NO_QUEUE_ITEM = NO_MEDIA_ITEM
  *
  * The window pushed by [Player] becomes the session's media queue, which the service walks on its
  * own. This adapter only mirrors what the player reports back: five SDK flows reduced into one
- * [PlaybackState], plus the two events [Player] needs to keep its queue cursor in step.
+ * [PlaybackState], plus the two events [Player] needs to keep its queue cursor in step with the session.
  *
  * Requires `capabilities = ["detached-audio"]` in `lighttool.toml`; constructing it without that
  * throws `LightAudioPlayerException`. Construct on the main thread.
@@ -54,7 +54,7 @@ class LightAudioPlaybackController(
     private val _state = MutableStateFlow(PlaybackState())
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
-    override var onAdvance: ((Int) -> Unit)? = null
+    override var onIndexChanged: ((Int) -> Unit)? = null
     override var onWindowEnd: (() -> Unit)? = null
 
     private var windowSize = 0
@@ -102,18 +102,15 @@ class LightAudioPlaybackController(
     }
 
     /**
-     * The session moved through its queue. Forward steps are natural completions — including ones
-     * driven from outside the tool, such as a headset's next button — and the queue follows them.
-     * A backward step (an external "previous") only re-syncs: the tool's History is the authority
-     * on what "previous" means, so we never rewrite it from a platform transport command.
+     * The session moved through its queue on its own: a natural completion, or a transport command
+     * from outside the tool (car, headset, LightOS) in either direction. Every step is forwarded;
+     * the Player keeps the queue cursor and History in step with what is actually playing.
      */
     private fun followIndex(index: Int) {
-        if (index > lastIndex && lastIndex != NO_QUEUE_ITEM) {
-            lastIndex = index
-            onAdvance?.invoke(index)
-        } else if (index != lastIndex) {
-            lastIndex = index
-        }
+        if (index == lastIndex) return
+        val wasLive = lastIndex != NO_QUEUE_ITEM
+        lastIndex = index
+        if (wasLive) onIndexChanged?.invoke(index)
     }
 
     override fun play(window: List<PlayableTrack>) {

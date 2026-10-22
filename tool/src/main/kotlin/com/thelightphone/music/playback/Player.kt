@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
  * Stream URL via [TrackCache]/[SubsonicClient], and hands the [PlaybackController] seam a *window*
  * of tracks — the current one plus what follows it — so playback survives the tool screen being
  * gone (ADR-0003). The player then walks that window on its own and the queue cursor follows via
- * [PlaybackController.onAdvance]; the tool is a bookkeeper for playback, no longer its heartbeat.
+ * [PlaybackController.onIndexChanged]; the tool is a bookkeeper for playback, no longer its heartbeat.
  *
  * It also keeps the rolling prefetch window full — re-aimed after every queue edit, so it never
  * downloads a track that was just removed. The UI never touches the queue directly: it renders
@@ -56,7 +56,7 @@ class Player(
     private var windowStale = false
 
     init {
-        controller.onAdvance = { index -> scope.launch { followAdvance(index) } }
+        controller.onIndexChanged = { index -> scope.launch { followIndex(index) } }
         controller.onWindowEnd = { scope.launch { finishQueue() } }
     }
 
@@ -105,12 +105,22 @@ class Player(
     }
 
     /**
-     * The player finished `windowIndex` and moved on by itself — one natural completion per step,
-     * so the queue records exactly what played (History, Repeat ONE) even while the tool screen was
-     * gone. A stale or nearly-exhausted window is refilled here, at the boundary: the track that
-     * just started restarts at zero, which is where it already is.
+     * The player moved inside the window by itself. Forward: it finished `windowIndex` and moved on
+     * — one natural completion per step, so the queue records exactly what played (History, Repeat
+     * ONE) even while the tool screen was gone. Backward: a car / headset / LightOS "previous" —
+     * History is walked back the same number of steps, so the cursor, History and the UI agree
+     * with the session. Neither direction re-points playback (the session already moved); only a
+     * stale or nearly-exhausted window is refilled, at the boundary, where the track that just
+     * started restarts at zero, which is where it already is.
      */
-    private suspend fun followAdvance(index: Int) {
+    private suspend fun followIndex(index: Int) {
+        if (index < windowIndex) {
+            repeat(windowIndex - index) { queue.previous() }
+            windowIndex = index
+            refreshUpcoming()
+            refreshPrefetch()
+            return
+        }
         repeat(index - windowIndex) { queue.next(userSkip = false) }
         windowIndex = index
         queue.current.value?.let { cache.touch(it.id) }

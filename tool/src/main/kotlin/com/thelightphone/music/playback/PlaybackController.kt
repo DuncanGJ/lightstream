@@ -61,7 +61,7 @@ data class PlayableTrack(
  * the tool for every track would fall silent the moment the tool stopped running.
  *
  * Contract for adapters:
- * - [onAdvance] and [onWindowEnd] must be assigned BEFORE the first [play]; a callback that fires
+ * - [onIndexChanged] and [onWindowEnd] must be assigned BEFORE the first [play]; a callback that fires
  *   with no handler is dropped and the queue silently stops following playback. Either may be
  *   invoked on the implementation's own thread.
  * - Construct on the main thread unless the adapter documents otherwise.
@@ -78,8 +78,11 @@ interface PlaybackController {
     /** Move within the current entry. Clamped to the entry by the implementation. */
     fun seekTo(positionMs: Int)
 
-    /** The player moved to `window[index]` on its own — used to follow it with the queue cursor. */
-    var onAdvance: ((index: Int) -> Unit)?
+    /**
+     * The player moved to `window[index]` on its own — a natural completion, or a headset / car /
+     * LightOS transport command in either direction. Used to follow it with the queue cursor.
+     */
+    var onIndexChanged: ((index: Int) -> Unit)?
 
     /** The player reached the end of the window and stopped. */
     var onWindowEnd: (() -> Unit)?
