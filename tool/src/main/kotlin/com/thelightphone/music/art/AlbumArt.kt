@@ -29,22 +29,34 @@ class AlbumArt(
     private val dir: File,
     private val codec: ArtCodec,
 ) {
+    /** Covers already produced this session, so Now Playing never waits on disk for the current one. */
+    private val memory = HashMap<String, ByteArray>()
+
     suspend fun png(coverArtId: String): ByteArray? = withContext(Dispatchers.IO) {
+        synchronized(memory) { memory[coverArtId] }?.let { return@withContext it }
+        produce(coverArtId)?.also { synchronized(memory) { memory[coverArtId] = it } }
+    }
+
+    /** Fetch and dither ahead of need (the track that just started, the one after it). */
+    suspend fun warm(coverArtId: String) { png(coverArtId) }
+
+    private suspend fun produce(coverArtId: String): ByteArray? {
         val file = File(dir, fileNameFor(coverArtId))
-        if (file.exists()) return@withContext file.readBytes()
+        if (file.exists()) return file.readBytes()
         val response = http.get(subsonic.coverArtUrl(coverArtId, ART_SIZE_PX))
-        if (!response.status.isSuccess()) return@withContext null
-        val gray = codec.decode(response.body<ByteArray>()) ?: return@withContext null
+        if (!response.status.isSuccess()) return null
+        val gray = codec.decode(response.body<ByteArray>()) ?: return null
         val png = codec.encodePng(dither(autocontrast(gray)))
         dir.mkdirs()
         val tmp = File(dir, file.name + ".tmp")
         tmp.writeBytes(png)
         if (!tmp.renameTo(file)) tmp.delete()
-        png
+        return png
     }
 
     /** Forget every stored cover (Settings → clear metadata cache). */
     fun clear() {
+        synchronized(memory) { memory.clear() }
         dir.listFiles()?.forEach { it.delete() }
     }
 

@@ -25,8 +25,11 @@ import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
@@ -109,6 +112,21 @@ object MusicApp : AppControl {
         }
     }
 
+    private var artWarmJob: Job? = null
+
+    /**
+     * Have the cover ready before Now Playing asks for it: produce it as soon as a track becomes
+     * current, and the next track's while this one plays, so an auto-advance shows art at once.
+     */
+    private fun warmArtWith(session: Session) {
+        artWarmJob?.cancel()
+        artWarmJob = appScope.launch {
+            combine(session.player.current, session.player.upcoming) { now, next ->
+                listOfNotNull(now?.coverArt, next.firstOrNull()?.track?.coverArt)
+            }.distinctUntilChanged().collect { ids -> ids.forEach { session.art.warm(it) } }
+        }
+    }
+
     /**
      * The current session, for screens that are only reachable AFTER configuration (everything
      * Home links to besides Settings — Home itself gates on [session] being non-null).
@@ -161,6 +179,7 @@ object MusicApp : AppControl {
         val art = AlbumArt(http, client, artDir, AndroidArtCodec)
         val session = Session(client, LibraryRepository(client, metadataDb.metadataDao()), player, cache, art)
         _session.value = session
+        warmArtWith(session)
         return session
     }
 }

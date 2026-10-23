@@ -72,4 +72,17 @@ class AlbumArtTest {
         assertNull(f.art.png("al1"))
         Unit
     }
+
+    @Test
+    fun `a cover produced this session is served from memory even if its file is gone`() = runBlocking {
+        val f = Fixture()
+        val first = assertNotNull(f.art.png("al1"))
+        f.dir.resolve("al1.png").delete()
+
+        val again = assertNotNull(f.art.png("al1"))
+
+        assertContentEquals(first, again)
+        assertEquals(1, f.engine.requestHistory.size, "no refetch")
+        Unit
+    }
 }

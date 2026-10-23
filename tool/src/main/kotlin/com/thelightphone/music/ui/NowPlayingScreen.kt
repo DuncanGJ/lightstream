@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -80,14 +81,21 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Spacer(Modifier.height(16.dp))
-                AlbumArtImage(coverArtId = t.coverArt, dimmed = stopped)
-                Spacer(Modifier.height(16.dp))
-                LightText(t.title, variant = LightTextVariant.Heading, lighten = stopped, maxLines = 2, overflow = TextOverflow.Ellipsis, align = TextAlign.Center)
-                t.artist?.let { LightText(it, variant = LightTextVariant.Copy, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center, modifier = Modifier.padding(top = 6.dp)) }
+                // The art takes whatever height is left after everything below it is laid out, so
+                // the transport is never pushed off a short screen; the image picks the largest
+                // whole-pixel scale that fits that slot.
+                Spacer(Modifier.height(8.dp))
+                AlbumArtImage(
+                    coverArtId = t.coverArt,
+                    dimmed = stopped,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.height(12.dp))
+                LightText(t.title, variant = LightTextVariant.Heading, lighten = stopped, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center)
+                t.artist?.let { LightText(it, variant = LightTextVariant.Copy, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center, modifier = Modifier.padding(top = 4.dp)) }
                 t.album?.let { LightText(it, variant = LightTextVariant.Detail, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center) }
 
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(12.dp))
                 // Scrubber: drag anywhere on the bar to seek. Until the duration resolves there is
                 // nothing to scrub into, so it reads as empty and a drag lands on zero.
                 val duration = playback.durationMs
@@ -102,7 +110,7 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                     text = if (stopped) "Stopped · ${formatTime(duration)}" else "${formatTime(playback.positionMs)} / ${formatTime(duration)}",
                     variant = LightTextVariant.Detail,
                     lighten = true,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(top = 6.dp),
                 )
 
                 playback.error?.let { error ->
@@ -110,26 +118,27 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                         text = error.userMessage(),
                         variant = LightTextVariant.Detail,
                         align = TextAlign.Center,
-                        modifier = Modifier.padding(top = 12.dp),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 8.dp),
                     )
                 }
-            }
 
-            Spacer(Modifier.weight(1f))
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LightIcon(LightIcons.REWIND, contentDescription = "previous", modifier = Modifier.lightClickable { player.skipPrevious() })
-                LightIcon(LightIcons.SKIP_BACKWARD_FIFTEEN, contentDescription = "back 15 seconds", modifier = Modifier.lightClickable { player.skipBack() })
-                LightIcon(
-                    icon = if (playback.status.showsPause()) LightIcons.PAUSE else LightIcons.PLAY,
-                    size = 3f,
-                    modifier = Modifier.lightClickable { player.togglePlayPause() },
-                )
-                LightIcon(LightIcons.SKIP_FORWARD_FIFTEEN, contentDescription = "forward 15 seconds", modifier = Modifier.lightClickable { player.skipForward() })
-                LightIcon(LightIcons.FAST_FORWARD, contentDescription = "next", modifier = Modifier.lightClickable { player.skipNext() })
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LightIcon(LightIcons.REWIND, contentDescription = "previous", modifier = Modifier.lightClickable { player.skipPrevious() })
+                    LightIcon(LightIcons.SKIP_BACKWARD_FIFTEEN, contentDescription = "back 15 seconds", modifier = Modifier.lightClickable { player.skipBack() })
+                    LightIcon(
+                        icon = if (playback.status.showsPause()) LightIcons.PAUSE else LightIcons.PLAY,
+                        size = 3f,
+                        modifier = Modifier.lightClickable { player.togglePlayPause() },
+                    )
+                    LightIcon(LightIcons.SKIP_FORWARD_FIFTEEN, contentDescription = "forward 15 seconds", modifier = Modifier.lightClickable { player.skipForward() })
+                    LightIcon(LightIcons.FAST_FORWARD, contentDescription = "next", modifier = Modifier.lightClickable { player.skipNext() })
+                }
             }
 
             val repeatLabel = when (repeat) {
@@ -138,7 +147,7 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 RepeatMode.ONE -> "Repeat: One"
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 LightText(
@@ -156,12 +165,12 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
     }
 
     /**
-     * The dithered cover at an exact device-pixel multiple with nearest-neighbour sampling, so every
-     * dot stays a crisp square; no art (or art still loading) leaves an empty square the same size,
-     * so the column never jumps.
+     * The dithered cover at the largest whole-pixel multiple of its 240 px that fits the slot it is
+     * given (2× when there is room, else 1×, else shrink-to-fit), sampled nearest-neighbour so each
+     * dot stays a crisp square. No art yet leaves an empty square of the same size, so nothing jumps.
      */
     @Composable
-    private fun AlbumArtImage(coverArtId: String?, dimmed: Boolean) {
+    private fun AlbumArtImage(coverArtId: String?, dimmed: Boolean, modifier: Modifier = Modifier) {
         var image by remember(coverArtId) { mutableStateOf<ImageBitmap?>(null) }
         LaunchedEffect(coverArtId) {
             image = coverArtId?.let { id ->
@@ -170,17 +179,26 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 }
             }
         }
-        val sidePx = AlbumArt.ART_SIZE_PX * AlbumArt.ART_DISPLAY_SCALE
-        val side = with(LocalDensity.current) { sidePx.toDp() }
-        Box(Modifier.size(side).alpha(if (dimmed) 0.4f else 1f), contentAlignment = Alignment.Center) {
-            image?.let {
-                Image(
-                    bitmap = it,
-                    contentDescription = "album art",
-                    contentScale = ContentScale.FillBounds,
-                    filterQuality = FilterQuality.None,
-                    modifier = Modifier.size(side),
-                )
+        BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            val density = LocalDensity.current
+            val base = AlbumArt.ART_SIZE_PX
+            val roomPx = with(density) { minOf(maxWidth.toPx(), maxHeight.toPx()) }.toInt()
+            val sidePx = when {
+                roomPx >= base * AlbumArt.ART_DISPLAY_SCALE -> base * AlbumArt.ART_DISPLAY_SCALE
+                roomPx >= base -> base
+                else -> roomPx.coerceAtLeast(0)
+            }
+            val side = with(density) { sidePx.toDp() }
+            Box(Modifier.size(side).alpha(if (dimmed) 0.4f else 1f), contentAlignment = Alignment.Center) {
+                image?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = "album art",
+                        contentScale = ContentScale.FillBounds,
+                        filterQuality = FilterQuality.None,
+                        modifier = Modifier.size(side),
+                    )
+                }
             }
         }
     }
