@@ -62,11 +62,14 @@ private class FakePlaybackController : PlaybackController {
         private set
     var stopped = false
 
+    /** What the SDK reports as duration once a window starts; 0 = "stream not prepared yet". */
+    var durationOnPlay = 100_000
+
     override fun play(window: List<PlayableTrack>) {
         windows.add(window)
         index = 0
         stopped = false
-        _state.value = PlaybackState(PlaybackStatus.PLAYING, positionMs = 0, durationMs = 100_000)
+        _state.value = PlaybackState(PlaybackStatus.PLAYING, positionMs = 0, durationMs = durationOnPlay)
     }
     override fun pause() { _state.value = _state.value.copy(status = PlaybackStatus.PAUSED) }
     override fun resume() { stopped = false; _state.value = _state.value.copy(status = PlaybackStatus.PLAYING) }
@@ -581,5 +584,27 @@ class PlayerTest {
         assertTrue(previousRestarts(positionMs = 90_000))
         assertFalse(previousRestarts(positionMs = Player.RESTART_THRESHOLD_MS - 1))
         assertFalse(previousRestarts(positionMs = 0))
+    }
+
+    @Test
+    fun `the library duration shows until the stream reports its own`() = runBlocking {
+        val f = Fixture(this)
+        f.controller.durationOnPlay = 0 // cold start on a stream: media3 has not prepared yet
+        f.player.addToQueue(track("a1").copy(durationSec = 214))
+        awaitUntil("queued") { f.player.upcomingIds() == listOf("a1") }
+
+        f.player.playNextInQueue()
+        awaitUntil("playing") { f.player.state.value.status == PlaybackStatus.PLAYING }
+
+        assertEquals(214_000, f.player.state.value.durationMs, "the length is known from the library already")
+        f.player.release()
+    }
+
+    @Test
+    fun `the resolved duration wins once the stream reports it`() {
+        assertEquals(214_000, displayDurationMs(resolvedMs = 0, track = track("a1").copy(durationSec = 214)))
+        assertEquals(213_870, displayDurationMs(resolvedMs = 213_870, track = track("a1").copy(durationSec = 214)))
+        assertEquals(0, displayDurationMs(resolvedMs = 0, track = track("a1")))
+        assertEquals(0, displayDurationMs(resolvedMs = 0, track = null))
     }
 }

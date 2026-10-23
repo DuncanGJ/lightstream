@@ -7,8 +7,12 @@ import com.thelightphone.music.queue.RepeatMode
 import com.thelightphone.music.queue.Source
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -36,8 +40,32 @@ class Player(
     // The queue reads repeat live from us — one copy of the mode, nothing to hand-sync.
     private val queue = Queue(repeat = { _repeat.value })
 
-    val state: StateFlow<PlaybackState> = controller.state
     val current: StateFlow<Track?> = queue.current
+
+    /**
+     * Long-lived collectors of this Player's own. A child of [scope] so they stop with it, but
+     * cancelled by [release] on their own: an eager `stateIn` would otherwise keep the caller's
+     * scope alive forever (a test's `runBlocking` never returns).
+     */
+    private val ownScope = CoroutineScope(scope.coroutineContext + Job(scope.coroutineContext[Job]))
+
+    /**
+     * Playback state as the UI and the nudges see it: the seam's state, with the library's track
+     * length standing in for the duration until the stream has prepared and reports its own
+     * (now-playing-duration-delay #01). A cold start on a stream otherwise shows 0:00 / 0:00.
+     */
+    val state: StateFlow<PlaybackState> = combine(controller.state, queue.current) { s, track ->
+        s.copy(durationMs = displayDurationMs(s.durationMs, track))
+    }.stateIn(ownScope, SharingStarted.Eagerly, controller.state.value)
+
+    /**
+     * The same merged state, read synchronously from the seam. Decisions made in response to a
+     * button (previous, nudges, play/pause) use this rather than [state], which is one dispatch
+     * behind the seam by construction.
+     */
+    private fun snapshot(): PlaybackState = controller.state.value.let {
+        it.copy(durationMs = displayDurationMs(it.durationMs, queue.current.value))
+    }
 
     /** The queue page's window, re-emitted after every queue mutation — no manual invalidation. */
     private val _upcoming = MutableStateFlow<List<Queue.UpcomingItem>>(emptyList())
@@ -74,7 +102,7 @@ class Player(
      * the cache. Nothing skips on its own (unplayable content would loop); next is a button away.
      */
     fun togglePlayPause() {
-        when (state.value.status) {
+        when (snapshot().status) {
             PlaybackStatus.PLAYING, PlaybackStatus.BUFFERING -> controller.pause()
             PlaybackStatus.PAUSED, PlaybackStatus.STOPPED -> controller.resume()
             PlaybackStatus.ERROR -> if (queue.current.value != null) scope.launch { pushWindow() }
@@ -93,7 +121,7 @@ class Player(
     fun skipBack() = nudge(-NUDGE_MS)
 
     private fun nudge(deltaMs: Int) {
-        val s = state.value
+        val s = snapshot()
         seekTo(nudgedPosition(s.positionMs, s.durationMs, deltaMs))
     }
 
@@ -170,7 +198,7 @@ class Player(
      * loses your place or drops songs (only ✕ removes).
      */
     fun skipPrevious() {
-        if (previousRestarts(state.value.positionMs)) {
+        if (previousRestarts(snapshot().positionMs)) {
             seekTo(0)
             return
         }
@@ -203,6 +231,7 @@ class Player(
 
     fun release() {
         prefetchJob?.cancel()
+        ownScope.cancel()
         controller.release()
     }
 
@@ -279,3 +308,7 @@ internal fun nudgedPosition(positionMs: Int, durationMs: Int, deltaMs: Int): Int
 
 /** The library's duration, in the milliseconds the platform's now-playing surfaces expect. */
 private fun Track.durationMs(): Long? = durationSec?.let { it * 1000L }
+
+/** The resolved stream duration when known (it is exact), else the library's rounded one, else 0. */
+internal fun displayDurationMs(resolvedMs: Int, track: Track?): Int =
+    if (resolvedMs > 0) resolvedMs else track?.durationSec?.times(1000) ?: 0
