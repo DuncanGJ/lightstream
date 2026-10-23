@@ -1,8 +1,8 @@
 [tool]
 id = "io.github.duncangj.lightstream"
 label = "LightStream"
-versionCode = 3
-versionName = "0.2.1"
+versionCode = 4
+versionName = "0.2.2"
 permissions = ["android.permission.INTERNET"]
 # Detached playback: the SDK's tool-owned MediaSessionService keeps music going after the
 # tool screen is gone. The plugin turns this into the foreground-service permissions,

@@ -81,7 +81,8 @@ Queue edits reach the player at the next track boundary, never mid-song. See ADR
 ### Browse
 The navigation model: **iPod-style** hub-and-stack. A drill-down menu hierarchy (Music →
 Artists → artist → album → song), ascend with back. Maps onto the SDK's single push/pop
-screen stack (no tabs, no global chrome). Text-only rows — **no album art**. The only concept
+screen stack (no tabs, no global chrome). Text-only rows — **no album art in Browse**; the one
+place art appears is [[Now Playing]], dithered (ADR-0005). The only concept
 borrowed from Spotify is the [[Queue]].
 
 ### Search
@@ -93,8 +94,10 @@ by a **paged empty-query `search3`** (Navidrome returns the whole library pagina
 lazily as a sliding-window [[Source]].
 
 ### Now Playing
-The tool's home base — the current track plus transport controls: previous / next, play-pause,
-15-second nudges, a drag-to-seek scrubber, repeat, stop. Shown first when the tool opens if
+The tool's home base: one centered column — the album cover as a small **dithered** grayscale
+image (gen-1 iPod look: 240 px, 4 grays, Atkinson, ADR-0005), then title, artist, album, the
+drag-to-seek scrubber with times, then transport: previous / next, play-pause, 15-second nudges,
+repeat, stop. Shown first when the tool opens if
 something is playing. A dedicated [[Browse]] screen (not a modal), reachable from anywhere via a
 small shared bottom-bar affordance. The play-pause control shows ⏸ whenever playback is *meant*
 to continue, including the buffering gap between tracks. **Stop** parks the current track at 0:00

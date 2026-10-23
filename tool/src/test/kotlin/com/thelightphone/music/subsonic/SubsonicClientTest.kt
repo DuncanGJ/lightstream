@@ -30,7 +30,7 @@ private const val ARTISTS =
 private const val ALBUM =
     """{"subsonic-response":{"status":"ok","version":"1.16.1","album":{"id":"al1","name":"Blue","artist":"X",
         "song":[
-            {"id":"t1","title":"One","artist":"X","album":"Blue","albumId":"al1","track":1,"duration":201},
+            {"id":"t1","title":"One","artist":"X","album":"Blue","albumId":"al1","track":1,"duration":201,"coverArt":"al1"},
             {"id":"t2","title":"Two","artist":"X","album":"Blue","albumId":"al1","track":2,"duration":95}
         ]}}}"""
 
@@ -169,5 +169,30 @@ class SubsonicClientTest {
         assertEquals("mp3", url.parameters["format"])
         assertEquals("alice", url.parameters["u"])
         assertTrue(url.parameters.contains("t") && url.parameters.contains("s"), "auth must live in the URL itself")
+    }
+
+    @Test
+    fun `cover art URL asks the server for a square of the requested size with the same auth`() {
+        val (c, _) = client()
+
+        val url = Url(c.coverArtUrl("al1", 240))
+
+        assertTrue(url.toString().startsWith("https://music.example.com/rest/getCoverArt?"), url.toString())
+        assertEquals("al1", url.parameters["id"])
+        assertEquals("240", url.parameters["size"])
+        assertEquals("alice", url.parameters["u"])
+        assertNotNull(url.parameters["t"])
+        assertNotNull(url.parameters["s"])
+    }
+
+    @Test
+    fun `tracks carry the cover art id the server reports`() = runBlocking {
+        val (c, _) = client(response = ALBUM)
+
+        val tracks = c.getAlbumTracks("al1")
+
+        assertEquals("al1", tracks[0].coverArt)
+        assertEquals(null, tracks[1].coverArt, "absent on the wire stays absent")
+        Unit
     }
 }

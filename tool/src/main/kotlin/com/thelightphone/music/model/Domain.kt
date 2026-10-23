@@ -35,6 +35,8 @@ data class Track(
     val albumId: String?,
     val trackNumber: Int?,
     val durationSec: Int?,
+    /** Subsonic cover-art id (usually the album's), for `getCoverArt`; null when the server has none. */
+    val coverArt: String? = null,
 )
 
 @Serializable

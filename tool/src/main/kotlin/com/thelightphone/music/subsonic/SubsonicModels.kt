@@ -105,4 +105,5 @@ data class SongItem(
     val albumId: String? = null,
     val track: Int? = null,
     val duration: Int? = null,
+    val coverArt: String? = null,
 )

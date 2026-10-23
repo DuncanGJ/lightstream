@@ -128,6 +128,10 @@ class SubsonicClient(
         ),
     )
 
+    /** The album cover, server-resized to a [sizePx] square, with the same self-authenticating query. */
+    fun coverArtUrl(coverArtId: String, sizePx: Int): String =
+        buildUrl("getCoverArt", mapOf("id" to coverArtId, "size" to sizePx.toString()))
+
     // --- internals ---------------------------------------------------------
 
     private suspend fun request(
@@ -180,4 +184,4 @@ class SubsonicClient(
 class SubsonicException(val code: Int, message: String) : RuntimeException(message)
 
 private fun AlbumItem.toAlbum() = Album(id, name, artist, artistId, year, songCount)
-private fun SongItem.toTrack() = Track(id, title, artist, album, albumId, track, duration)
+private fun SongItem.toTrack() = Track(id, title, artist, album, albumId, track, duration, coverArt)

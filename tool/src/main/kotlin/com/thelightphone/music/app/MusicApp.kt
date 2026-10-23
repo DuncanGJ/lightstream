@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.thelightphone.music.art.AlbumArt
+import com.thelightphone.music.art.AndroidArtCodec
 import com.thelightphone.music.cache.CacheDatabase
 import com.thelightphone.music.cache.MetadataDatabase
 import com.thelightphone.music.cache.TrackCache
@@ -40,6 +42,7 @@ class Session(
     val library: LibraryRepository,
     val player: Player,
     val trackCache: TrackCache,
+    val art: AlbumArt,
 )
 
 /**
@@ -72,6 +75,7 @@ object MusicApp : AppControl {
     private lateinit var db: CacheDatabase
     private lateinit var metadataDb: MetadataDatabase
     private lateinit var cacheDir: File
+    private lateinit var artDir: File
     private lateinit var dataStore: DataStore<Preferences>
 
     /** The SDK audio factory, captured from the first screen — detached playback outlives it. */
@@ -96,6 +100,7 @@ object MusicApp : AppControl {
         db = context.buildDatabase(CacheDatabase::class.java, "trackcache.db")
         metadataDb = context.buildDatabase(MetadataDatabase::class.java, "metadata.db")
         cacheDir = File(context.filesDir, "trackcache")
+        artDir = File(context.filesDir, "coverart")
         dataStore = context.dataStore
         appScope.launch {
             _queuedFlashMs.value = MusicSettings.loadQueuedFlashMs(dataStore)
@@ -129,6 +134,7 @@ object MusicApp : AppControl {
 
     override suspend fun clearMetadataCache() {
         metadataDb.metadataDao().clearAll()
+        _session.value?.art?.clear()
     }
 
     private fun configure(creds: SubsonicCredentials): Session {
@@ -152,7 +158,8 @@ object MusicApp : AppControl {
             prefetchDepth = { _tunables.value.prefetchDepth },
             resolveRemote = { AudioSource.Remote(client.streamUrl(it)) },
         )
-        val session = Session(client, LibraryRepository(client, metadataDb.metadataDao()), player, cache)
+        val art = AlbumArt(http, client, artDir, AndroidArtCodec)
+        val session = Session(client, LibraryRepository(client, metadataDb.metadataDao()), player, cache, art)
         _session.value = session
         return session
     }

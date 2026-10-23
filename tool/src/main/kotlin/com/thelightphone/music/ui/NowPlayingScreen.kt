@@ -1,20 +1,36 @@
 package com.thelightphone.music.ui
 
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.thelightphone.music.app.MusicApp
+import com.thelightphone.music.art.AlbumArt
 import com.thelightphone.music.playback.PlaybackError
 import com.thelightphone.music.playback.PlaybackErrorKind
 import com.thelightphone.music.playback.PlaybackStatus
@@ -29,10 +45,18 @@ import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.LightThemeTokens
 import com.thelightphone.sdk.ui.LightTouchableProgressBar
 import com.thelightphone.sdk.ui.lightClickable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
+/**
+ * One centered column, top to bottom: dithered album art (ADR-0005), title, artist, album, the
+ * scrubber with times, then transport. Stop grays the art and title; the art stays, because the
+ * track is still current.
+ */
 class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<Unit>(sealedActivity) {
 
-    private val player = MusicApp.requireSession().player
+    private val session = MusicApp.requireSession()
+    private val player = session.player
 
     @Composable
     override fun Content() {
@@ -50,37 +74,45 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 LightText("Nothing playing.", variant = LightTextVariant.Copy, lighten = true, modifier = Modifier.padding(vertical = 24.dp))
                 return@MusicScaffold
             }
-
             val stopped = playback.status == PlaybackStatus.STOPPED
-            Spacer(Modifier.height(24.dp))
-            LightText(t.title, variant = LightTextVariant.Heading, lighten = stopped, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            t.artist?.let { LightText(it, variant = LightTextVariant.Copy, lighten = true, modifier = Modifier.padding(top = 8.dp)) }
-            t.album?.let { LightText(it, variant = LightTextVariant.Detail, lighten = true) }
 
-            Spacer(Modifier.height(24.dp))
-            // Scrubber: drag anywhere on the bar to seek. Until the duration resolves there is
-            // nothing to scrub into, so it reads as empty and a drag lands on zero.
-            val duration = playback.durationMs
-            Box(Modifier.fillMaxWidth()) {
-                LightTouchableProgressBar(
-                    colors = LightThemeTokens.colors,
-                    progress = if (duration > 0) playback.positionMs.toFloat() / duration else 0f,
-                    onValueChange = { fraction -> player.seekTo((fraction * duration).toInt()) },
-                )
-            }
-            LightText(
-                text = if (stopped) "Stopped · ${formatTime(duration)}" else "${formatTime(playback.positionMs)} / ${formatTime(duration)}",
-                variant = LightTextVariant.Detail,
-                lighten = true,
-                modifier = Modifier.padding(top = 8.dp),
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(Modifier.height(16.dp))
+                AlbumArtImage(coverArtId = t.coverArt, dimmed = stopped)
+                Spacer(Modifier.height(16.dp))
+                LightText(t.title, variant = LightTextVariant.Heading, lighten = stopped, maxLines = 2, overflow = TextOverflow.Ellipsis, align = TextAlign.Center)
+                t.artist?.let { LightText(it, variant = LightTextVariant.Copy, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center, modifier = Modifier.padding(top = 6.dp)) }
+                t.album?.let { LightText(it, variant = LightTextVariant.Detail, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center) }
 
-            playback.error?.let { error ->
+                Spacer(Modifier.height(20.dp))
+                // Scrubber: drag anywhere on the bar to seek. Until the duration resolves there is
+                // nothing to scrub into, so it reads as empty and a drag lands on zero.
+                val duration = playback.durationMs
+                Box(Modifier.fillMaxWidth()) {
+                    LightTouchableProgressBar(
+                        colors = LightThemeTokens.colors,
+                        progress = if (duration > 0) playback.positionMs.toFloat() / duration else 0f,
+                        onValueChange = { fraction -> player.seekTo((fraction * duration).toInt()) },
+                    )
+                }
                 LightText(
-                    text = error.userMessage(),
+                    text = if (stopped) "Stopped · ${formatTime(duration)}" else "${formatTime(playback.positionMs)} / ${formatTime(duration)}",
                     variant = LightTextVariant.Detail,
-                    modifier = Modifier.padding(top = 16.dp),
+                    lighten = true,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
+
+                playback.error?.let { error ->
+                    LightText(
+                        text = error.userMessage(),
+                        variant = LightTextVariant.Detail,
+                        align = TextAlign.Center,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -118,6 +150,36 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                     icon = LightIcons.STOP,
                     contentDescription = "stop (parks the track at the start)",
                     modifier = Modifier.lightClickable { player.stop() },
+                )
+            }
+        }
+    }
+
+    /**
+     * The dithered cover at an exact device-pixel multiple with nearest-neighbour sampling, so every
+     * dot stays a crisp square; no art (or art still loading) leaves an empty square the same size,
+     * so the column never jumps.
+     */
+    @Composable
+    private fun AlbumArtImage(coverArtId: String?, dimmed: Boolean) {
+        var image by remember(coverArtId) { mutableStateOf<ImageBitmap?>(null) }
+        LaunchedEffect(coverArtId) {
+            image = coverArtId?.let { id ->
+                session.art.png(id)?.let { png ->
+                    withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(png, 0, png.size)?.asImageBitmap() }
+                }
+            }
+        }
+        val sidePx = AlbumArt.ART_SIZE_PX * AlbumArt.ART_DISPLAY_SCALE
+        val side = with(LocalDensity.current) { sidePx.toDp() }
+        Box(Modifier.size(side).alpha(if (dimmed) 0.4f else 1f), contentAlignment = Alignment.Center) {
+            image?.let {
+                Image(
+                    bitmap = it,
+                    contentDescription = "album art",
+                    contentScale = ContentScale.FillBounds,
+                    filterQuality = FilterQuality.None,
+                    modifier = Modifier.size(side),
                 )
             }
         }
