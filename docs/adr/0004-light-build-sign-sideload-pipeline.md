@@ -43,6 +43,14 @@ Only three things reach Light's builder: `tool/lighttool.toml`, `tool/build.grad
 
 ## Developer distribution
 
+*Amended 2026-10-23.* The Tool Manager route is the **official developer install path** now that
+LightOS ships the Tool Manager (light-sdk 0.2.2 / tool-manager 0.0.17, whose PR #10 fixed the
+Android ethernet/hotspot connectivity it depends on); adb is the fallback. The Tool Manager source
+is kept as a sibling checkout at `../light-tool-manager` (not a submodule: the builder only sees
+`tool/`, and a submodule would be a standing divergence from upstream). Use it to read the UI
+templates and to run `./gradlew :serverrunner:run` for a local server when developing against the
+emulator.
+
 The `uploadTool` Gradle task that arrived with the SDK pushes the debug APK over the LAN into the
 device's APK inbox and waits for the install:
 
