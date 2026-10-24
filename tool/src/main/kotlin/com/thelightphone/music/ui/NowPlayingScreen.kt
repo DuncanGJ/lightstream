@@ -91,9 +91,9 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 Spacer(Modifier.height(12.dp))
-                LightText(t.title, variant = LightTextVariant.Heading, lighten = stopped, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center)
-                t.artist?.let { LightText(it, variant = LightTextVariant.Copy, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center, modifier = Modifier.padding(top = 4.dp)) }
-                t.album?.let { LightText(it, variant = LightTextVariant.Detail, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center) }
+                LightText(t.title, variant = LightTextVariant.Subheading, lighten = stopped, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center)
+                t.artist?.let { LightText(it, variant = LightTextVariant.Detail, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center, modifier = Modifier.padding(top = 4.dp)) }
+                t.album?.let { LightText(it, variant = LightTextVariant.Fine, lighten = true, maxLines = 1, overflow = TextOverflow.Ellipsis, align = TextAlign.Center) }
 
                 Spacer(Modifier.height(12.dp))
                 // Scrubber: drag anywhere on the bar to seek. Until the duration resolves there is
@@ -108,7 +108,7 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 }
                 LightText(
                     text = if (stopped) "Stopped · ${formatTime(duration)}" else "${formatTime(playback.positionMs)} / ${formatTime(duration)}",
-                    variant = LightTextVariant.Detail,
+                    variant = LightTextVariant.Fine,
                     lighten = true,
                     modifier = Modifier.padding(top = 6.dp),
                 )
@@ -125,19 +125,19 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 }
 
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    LightIcon(LightIcons.REWIND, contentDescription = "previous", modifier = Modifier.lightClickable { player.skipPrevious() })
-                    LightIcon(LightIcons.SKIP_BACKWARD_FIFTEEN, contentDescription = "back 15 seconds", modifier = Modifier.lightClickable { player.skipBack() })
+                    LightIcon(LightIcons.REWIND, size = TRANSPORT_ICON, contentDescription = "previous", modifier = Modifier.lightClickable { player.skipPrevious() })
+                    LightIcon(LightIcons.SKIP_BACKWARD_FIFTEEN, size = TRANSPORT_ICON, contentDescription = "back 15 seconds", modifier = Modifier.lightClickable { player.skipBack() })
                     LightIcon(
                         icon = if (playback.status.showsPause()) LightIcons.PAUSE else LightIcons.PLAY,
-                        size = 3f,
+                        size = PLAY_ICON,
                         modifier = Modifier.lightClickable { player.togglePlayPause() },
                     )
-                    LightIcon(LightIcons.SKIP_FORWARD_FIFTEEN, contentDescription = "forward 15 seconds", modifier = Modifier.lightClickable { player.skipForward() })
-                    LightIcon(LightIcons.FAST_FORWARD, contentDescription = "next", modifier = Modifier.lightClickable { player.skipNext() })
+                    LightIcon(LightIcons.SKIP_FORWARD_FIFTEEN, size = TRANSPORT_ICON, contentDescription = "forward 15 seconds", modifier = Modifier.lightClickable { player.skipForward() })
+                    LightIcon(LightIcons.FAST_FORWARD, size = TRANSPORT_ICON, contentDescription = "next", modifier = Modifier.lightClickable { player.skipNext() })
                 }
             }
 
@@ -147,16 +147,17 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
                 RepeatMode.ONE -> "Repeat: One"
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 LightText(
                     text = repeatLabel,
-                    variant = LightTextVariant.Detail,
+                    variant = LightTextVariant.Fine,
                     modifier = Modifier.weight(1f).lightClickable { player.cycleRepeat() },
                 )
                 LightIcon(
                     icon = LightIcons.STOP,
+                    size = TRANSPORT_ICON,
                     contentDescription = "stop (parks the track at the start)",
                     modifier = Modifier.lightClickable { player.stop() },
                 )
@@ -203,6 +204,10 @@ class NowPlayingScreen(sealedActivity: SealedLightActivity) : SimpleLightScreen<
         }
     }
 }
+
+/** Transport icon sizes in SDK grid units (SDK default is 2; the play button was 3). */
+private const val TRANSPORT_ICON = 1.5f
+private const val PLAY_ICON = 2.25f
 
 /** Product copy per failure kind — says what happened and what the buttons on this screen can do about it. */
 internal fun PlaybackError.userMessage(): String = when (kind) {
